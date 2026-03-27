@@ -1,0 +1,56 @@
+.close-table-modal {
+  min-width: 400px;
+}
+
+.close-table-modal__items {
+  min-height: 60px;
+}
+
+.close-table-modal__total {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  margin-bottom: 20px;
+}
+
+.close-table-modal__total strong {
+  color: var(--color-text-primary);
+  margin-left: 6px;
+  font-size: 18px;
+}
+
+.close-table-modal__payment-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+}
+
+.close-table-modal__payment-options {
+  display: flex;
+  gap: 10px;
+}
+
+.close-table-modal__payment-btn {
+  flex: 1;
+  padding: 10px;
+  border-radius: var(--radius-input);
+  border: 1.5px solid var(--color-border);
+  background-color: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.close-table-modal__payment-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.close-table-modal__payment-btn--active {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-light);
+  color: var(--color-accent);
+}
