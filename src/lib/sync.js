@@ -6,12 +6,14 @@
  * Only categories and products are synced — table_defs are local-only.
  */
 
-import { supabase, isSupabaseReady } from './supabase.js'
+import { supabase, isSupabaseReady, uploadProductImage } from './supabase.js'
 import {
   getUnsyncedCategories, markCategorySynced,
   getUnsyncedProducts,   markProductSynced,
   getUnsyncedOrders,     markOrderSynced,
   getUnsyncedOrderItems, markOrderItemSynced,
+  upsertCategoryFromRemote, upsertProductFromRemote,
+  getPendingDeletes, clearPendingDelete,
   persistDb,
 } from './localDb.js'
 
@@ -22,6 +24,19 @@ export async function syncToSupabase() {
   }
 
   let synced = { categories: 0, products: 0, orders: 0, orderItems: 0 }
+
+  // ── Pending deletes ────────────────────────────────────────────
+  const pendingDeletes = getPendingDeletes()
+  for (const pd of pendingDeletes) {
+    const table = pd.entity_type === 'product' ? 'products' : 'categories'
+    const { error } = await supabase.from(table).delete().eq('id', pd.remote_id)
+    if (!error) {
+      await clearPendingDelete(pd.id)
+      console.log(`[Sync] ✓ Deleted ${pd.entity_type} remote:${pd.remote_id} from Supabase`)
+    } else {
+      console.error(`[Sync] ✗ Failed to delete ${pd.entity_type} remote:${pd.remote_id}`, error)
+    }
+  }
 
   // ── Categories ─────────────────────────────────────────────────
   const cats = getUnsyncedCategories()
@@ -35,18 +50,35 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markCategorySynced(id, data.id)
       synced.categories++
+      console.log(`[Sync] ✓ Category synced: "${name}" (local:${id} → remote:${data.id})`)
     } else if (error) {
-      console.error('[sync] category upsert failed', error)
+      console.error('[Sync] ✗ Category upsert failed', error)
     }
   }
 
   // ── Products ───────────────────────────────────────────────────
   const prods = getUnsyncedProducts()
   for (const [id, name, price, stock, category_id, image_url, recipe] of prods) {
+    // If image is a local path, upload to Supabase Storage and get public URL
+    let supabaseImageUrl = image_url
+    if (image_url && image_url.startsWith('/products/')) {
+      try {
+        const filename = image_url.replace('/products/', '')
+        const bytes = await window.electronAPI?.images?.readFileBytes(image_url)
+        if (bytes) {
+          supabaseImageUrl = await uploadProductImage(bytes, filename)
+          console.log(`[Sync] ↑ Image uploaded: ${filename} → ${supabaseImageUrl}`)
+        }
+      } catch (imgErr) {
+        console.error('[Sync] ✗ Image upload failed — syncing without image', imgErr)
+        supabaseImageUrl = null
+      }
+    }
+
     const { data, error } = await supabase
       .from('products')
       .upsert(
-        { local_id: String(id), name, price, stock, category_id: String(category_id), image_url, recipe },
+        { local_id: String(id), name, price, stock, category_id: String(category_id), image_url: supabaseImageUrl, recipe },
         { onConflict: 'local_id' }
       )
       .select('id')
@@ -55,18 +87,19 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markProductSynced(id, data.id)
       synced.products++
+      console.log(`[Sync] ✓ Product synced: "${name}" ₺${price} (local:${id} → remote:${data.id})`)
     } else if (error) {
-      console.error('[sync] product upsert failed', error)
+      console.error('[Sync] ✗ Product upsert failed', error)
     }
   }
 
   // ── Orders ─────────────────────────────────────────────────────
   const orders = getUnsyncedOrders()
-  for (const [id, local_id, status, payment_method, total, created_at, closed_at] of orders) {
+  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at] of orders) {
     const { data, error } = await supabase
       .from('orders')
       .upsert(
-        { local_id, status, payment_method, total, created_at, closed_at },
+        { local_id, table_id, status, payment_method, total, created_at, closed_at },
         { onConflict: 'local_id' }
       )
       .select('id')
@@ -75,8 +108,9 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markOrderSynced(id, data.id)
       synced.orders++
+      console.log(`[Sync] ✓ Order synced: local_id=${local_id} | ₺${total} | ${payment_method} | ${status} (remote:${data.id})`)
     } else if (error) {
-      console.error('[sync] order upsert failed', error)
+      console.error('[Sync] ✗ Order upsert failed', error)
     }
   }
 
@@ -97,12 +131,67 @@ export async function syncToSupabase() {
       markOrderItemSynced(id)
       itemDirty = true
       synced.orderItems++
+      console.log(`[Sync] ✓ Order item synced: local_id=${local_id} | qty:${quantity} × ₺${unit_price} → order:${order_remote_id}`)
     } else {
-      console.error('[sync] order_item upsert failed', error)
+      console.error('[Sync] ✗ Order item upsert failed', error)
     }
   }
   if (itemDirty) await persistDb()
 
-  console.log(`[sync] done — cats:${synced.categories} prods:${synced.products} orders:${synced.orders} items:${synced.orderItems}`)
+  const anyWork = synced.categories + synced.products + synced.orders + synced.orderItems
+  if (anyWork > 0) {
+    console.log(`[Sync] ── Sync complete ── cats:${synced.categories} prods:${synced.products} orders:${synced.orders} items:${synced.orderItems}`)
+  }
   return synced
+}
+
+export async function pullFromSupabase() {
+  if (!isSupabaseReady) {
+    console.log('[Sync] Supabase not configured — skipping pull')
+    return
+  }
+
+  // Build sets of remote IDs that are pending deletion — skip these during pull
+  const pendingDeletes = getPendingDeletes()
+  const pendingCatIds  = new Set(pendingDeletes.filter(p => p.entity_type === 'category').map(p => p.remote_id))
+  const pendingProdIds = new Set(pendingDeletes.filter(p => p.entity_type === 'product').map(p => p.remote_id))
+
+  // ── Pull categories ────────────────────────────────────────────
+  const { data: cats, error: catErr } = await supabase
+    .from('categories')
+    .select('id, name, color, icon')
+
+  if (catErr) {
+    console.error('[Sync] ✗ Failed to pull categories', catErr)
+  } else if (cats) {
+    for (const c of cats) {
+      if (pendingCatIds.has(c.id)) continue  // locally deleted — skip
+      await upsertCategoryFromRemote({ remoteId: c.id, name: c.name, color: c.color, icon: c.icon })
+    }
+    await persistDb()
+    console.log(`[Sync] ↓ Pulled ${cats.length} categories from Supabase`)
+  }
+
+  // ── Pull products ──────────────────────────────────────────────
+  const { data: prods, error: prodErr } = await supabase
+    .from('products')
+    .select('id, name, price, stock, category_id, image_url')
+
+  if (prodErr) {
+    console.error('[Sync] ✗ Failed to pull products', prodErr)
+  } else if (prods) {
+    for (const p of prods) {
+      if (pendingProdIds.has(p.id)) continue  // locally deleted — skip
+      await upsertProductFromRemote({
+        remoteId: p.id,
+        name: p.name,
+        price: p.price,
+        stock: p.stock,
+        remoteCatId: p.category_id,
+        imageUrl: p.image_url,
+      })
+    }
+    await persistDb()
+    console.log(`[Sync] ↓ Pulled ${prods.length} products from Supabase`)
+  }
 }

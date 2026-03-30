@@ -72,6 +72,28 @@ ipcMain.handle('images:save', async (_event, sourcePath) => {
   return `/products/${filename}`
 })
 
+ipcMain.handle('images:delete', (_event, relativePath) => {
+  try {
+    const filename = path.basename(relativePath)
+    const dest = path.join(__dirname, '..', 'public', 'products', filename)
+    if (fs.existsSync(dest)) fs.unlinkSync(dest)
+  } catch (err) {
+    console.error('[images:delete] failed:', err)
+  }
+})
+
+ipcMain.handle('images:readFileBytes', (_event, relativePath) => {
+  try {
+    const filename = path.basename(relativePath)
+    const filePath = path.join(__dirname, '..', 'public', 'products', filename)
+    const buf = fs.readFileSync(filePath)
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  } catch (err) {
+    console.error('[images:readFileBytes] failed:', err)
+    return null
+  }
+})
+
 app.whenReady().then(() => {
   createWindow()
 

@@ -21,27 +21,6 @@ export function isDbInitialized() { return db !== null }
 // ── Seed data (inserted once on first run) ────────────────────────
 const SEED_TABLE_DEFS = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, name: `Masa-${i + 1}` }))
 
-const SEED_CATEGORIES = [
-  { id: 1, name: 'Kahveler',   color: '#e8975a', icon: 'coffee'   },
-  { id: 2, name: 'Tatlılar',   color: '#14b8a6', icon: 'cake'     },
-  { id: 3, name: 'Kokteyller', color: '#6366f1', icon: 'cocktail' },
-  { id: 4, name: 'Yemekler',   color: '#ef4444', icon: 'food'     },
-]
-
-const SEED_PRODUCTS = [
-  { id: 1,  name: 'Caffè Latte',              price: 85,  stock: 50, category_id: 1 },
-  { id: 2,  name: 'Filtre Kahve',             price: 65,  stock: 30, category_id: 1 },
-  { id: 3,  name: 'Cappuccino',               price: 75,  stock: 40, category_id: 1 },
-  { id: 4,  name: 'Flat White',               price: 70,  stock: 22, category_id: 1 },
-  { id: 5,  name: 'San Sebastian Cheesecake', price: 120, stock: 12, category_id: 2 },
-  { id: 6,  name: 'Tiramisu',                 price: 95,  stock: 8,  category_id: 2 },
-  { id: 7,  name: 'Brownie',                  price: 75,  stock: 3,  category_id: 2 },
-  { id: 8,  name: 'Mojito',                   price: 110, stock: 25, category_id: 3 },
-  { id: 9,  name: 'Strawberry Daiquiri',      price: 125, stock: 15, category_id: 3 },
-  { id: 10, name: 'Eggs Benedict',            price: 130, stock: 20, category_id: 4 },
-  { id: 11, name: 'Avokado Toast',            price: 95,  stock: 18, category_id: 4 },
-  { id: 12, name: 'Pancake Stack',            price: 110, stock: 0,  category_id: 2 },
-]
 
 // ── Schema ────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -98,6 +77,12 @@ const SCHEMA = `
     is_synced  INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (order_id) REFERENCES orders(id)
   );
+
+  CREATE TABLE IF NOT EXISTS pending_deletes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT    NOT NULL,
+    remote_id   INTEGER NOT NULL
+  );
 `
 
 // ── Init ──────────────────────────────────────────────────────────
@@ -152,18 +137,6 @@ export async function initDb() {
   if (isEmpty) {
     for (const t of SEED_TABLE_DEFS) {
       db.run('INSERT INTO table_defs (id, name) VALUES (?, ?)', [t.id, t.name])
-    }
-    for (const c of SEED_CATEGORIES) {
-      db.run(
-        'INSERT INTO categories (id, name, color, icon, is_synced) VALUES (?, ?, ?, ?, 0)',
-        [c.id, c.name, c.color, c.icon]
-      )
-    }
-    for (const p of SEED_PRODUCTS) {
-      db.run(
-        'INSERT INTO products (id, name, price, stock, category_id, is_synced) VALUES (?, ?, ?, ?, ?, 0)',
-        [p.id, p.name, p.price, p.stock, p.category_id]
-      )
     }
     await persistDb()
   }
@@ -250,7 +223,12 @@ export async function updateCategory(id, fields) {
 
 export async function deleteCategory(id) {
   requireDb()
+  const remoteRes = db.exec('SELECT remote_id FROM categories WHERE id = ?', [id])
+  const remoteId = remoteRes[0]?.values[0]?.[0]
   db.run('DELETE FROM categories WHERE id = ?', [id])
+  if (remoteId) {
+    db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('category', ?)", [remoteId])
+  }
   await persistDb()
 }
 
@@ -286,7 +264,23 @@ export async function upsertProduct({ id, name, price, stock, categoryId, imageU
 
 export async function deleteProduct(id) {
   requireDb()
+  const res = db.exec('SELECT image_url, remote_id FROM products WHERE id = ?', [id])
+  const imageUrl = res[0]?.values[0]?.[0]
+  const remoteId = res[0]?.values[0]?.[1]
   db.run('DELETE FROM products WHERE id = ?', [id])
+  if (remoteId) {
+    db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('product', ?)", [remoteId])
+  }
+  await persistDb()
+  return imageUrl
+}
+
+export async function clearAllDataExceptTables() {
+  requireDb()
+  db.run('DELETE FROM order_items')
+  db.run('DELETE FROM orders')
+  db.run('DELETE FROM products')
+  db.run('DELETE FROM categories')
   await persistDb()
 }
 
@@ -305,11 +299,15 @@ export async function saveCompletedOrder(txData) {
   const cardAmt = isSplit ? (txData.splitCard ?? null)
                 : txData.paymentMethod === 'card' ? txData.total : null
 
+  // If this was a QR order already in Supabase, mark as pre-synced to avoid duplicate
+  const isSynced = txData.supabaseOrderId ? 1 : 0
+  const remoteId = txData.supabaseOrderId ?? null
+
   db.run(
     `INSERT INTO orders
        (id, local_id, table_id, table_name, status, payment_method,
-        subtotal, tax, discount, total, cash_amount, card_amount, is_synced, created_at, closed_at)
-     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        subtotal, tax, discount, total, cash_amount, card_amount, is_synced, remote_id, created_at, closed_at)
+     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId,
       localId,
@@ -322,6 +320,8 @@ export async function saveCompletedOrder(txData) {
       txData.total,
       cashAmt,
       cardAmt,
+      isSynced,
+      remoteId,
       now,
       closedAt,
     ]
@@ -350,6 +350,48 @@ export function getDailyRevenue() {
   return res[0]?.values[0][0] ?? 0
 }
 
+// ── Pull helpers (used by sync.js to write Supabase data into localDb) ───────
+
+export async function upsertCategoryFromRemote({ remoteId, name, color, icon }) {
+  requireDb()
+  const existing = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteId)])
+  if (existing.length && existing[0].values.length) {
+    const localId = existing[0].values[0][0]
+    db.run(
+      'UPDATE categories SET name=?, color=?, icon=?, is_synced=1 WHERE id=?',
+      [name, color, icon ?? 'tag', localId]
+    )
+  } else {
+    const localId = Date.now() + (Math.random() * 1000 | 0)
+    db.run(
+      'INSERT OR IGNORE INTO categories (id, name, color, icon, is_synced, remote_id) VALUES (?,?,?,?,1,?)',
+      [localId, name, color, icon ?? 'tag', String(remoteId)]
+    )
+  }
+}
+
+export async function upsertProductFromRemote({ remoteId, name, price, stock, remoteCatId, imageUrl }) {
+  requireDb()
+  // Resolve local category id from its remote_id
+  const catRes = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteCatId)])
+  const localCatId = catRes.length && catRes[0].values.length ? catRes[0].values[0][0] : remoteCatId
+
+  const existing = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteId)])
+  if (existing.length && existing[0].values.length) {
+    const localId = existing[0].values[0][0]
+    db.run(
+      'UPDATE products SET name=?, price=?, stock=?, category_id=?, image_url=?, is_synced=1 WHERE id=?',
+      [name, price, stock, localCatId, imageUrl ?? null, localId]
+    )
+  } else {
+    const localId = Date.now() + (Math.random() * 1000 | 0)
+    db.run(
+      'INSERT OR IGNORE INTO products (id, name, price, stock, category_id, image_url, is_synced, remote_id) VALUES (?,?,?,?,?,?,1,?)',
+      [localId, name, price, stock, localCatId, imageUrl ?? null, String(remoteId)]
+    )
+  }
+}
+
 // ── Sync helpers (used by sync.js) ────────────────────────────────
 export function getUnsyncedCategories() {
   const res = db.exec('SELECT * FROM categories WHERE is_synced = 0')
@@ -357,7 +399,9 @@ export function getUnsyncedCategories() {
 }
 
 export function getUnsyncedProducts() {
-  const res = db.exec('SELECT * FROM products WHERE is_synced = 0')
+  const res = db.exec(
+    'SELECT id, name, price, stock, category_id, image_url, recipe FROM products WHERE is_synced = 0'
+  )
   return res.length ? res[0].values : []
 }
 
@@ -373,7 +417,7 @@ export async function markProductSynced(id, remoteId) {
 
 export function getUnsyncedOrders() {
   const res = db.exec(
-    `SELECT id, local_id, status, payment_method, total, created_at, closed_at
+    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at
      FROM orders WHERE is_synced = 0`
   )
   return res.length ? res[0].values : []
@@ -397,6 +441,18 @@ export async function markOrderSynced(id, remoteId) {
 
 export function markOrderItemSynced(id) {
   db.run('UPDATE order_items SET is_synced = 1 WHERE id = ?', [id])
+}
+
+export function getPendingDeletes() {
+  if (!db) return []
+  const res = db.exec('SELECT id, entity_type, remote_id FROM pending_deletes')
+  if (!res.length) return []
+  return res[0].values.map(([id, entity_type, remote_id]) => ({ id, entity_type, remote_id }))
+}
+
+export async function clearPendingDelete(id) {
+  db.run('DELETE FROM pending_deletes WHERE id = ?', [id])
+  await persistDb()
 }
 
 export function getUnsyncedCount() {

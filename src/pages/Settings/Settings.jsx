@@ -64,7 +64,42 @@ const IconFood = () => (
   </svg>
 )
 
-const CATEGORY_ICONS = { coffee: IconCoffee, cake: IconCake, cocktail: IconCocktail, food: IconFood }
+const IconTea = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 8h1a4 4 0 0 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z"/><line x1="6" y1="2" x2="6" y2="5"/><line x1="10" y1="2" x2="10" y2="5"/><line x1="14" y1="2" x2="14" y2="5"/>
+  </svg>
+)
+const IconJuice = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 2h8l1 6H7L8 2z"/><path d="M7 8l1 13h8l1-13"/><line x1="6" y1="12" x2="18" y2="12"/>
+  </svg>
+)
+const IconSandwich = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 11l19-9-9 19-2-8-8-2z"/><path d="M3 6h18"/><path d="M3 18h18"/>
+  </svg>
+)
+const IconDessert = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 11l5-9 5 9"/><path d="M12 2v20"/><path d="M5 21h14"/><circle cx="12" cy="14" r="3"/>
+  </svg>
+)
+const IconBreakfast = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/>
+  </svg>
+)
+const IconPizza = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2L2 22h20L12 2z"/><path d="M12 2v20"/><circle cx="9" cy="14" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/>
+  </svg>
+)
+
+const CATEGORY_ICONS = {
+  coffee: IconCoffee, cake: IconCake, cocktail: IconCocktail, food: IconFood,
+  tea: IconTea, juice: IconJuice, sandwich: IconSandwich,
+  dessert: IconDessert, breakfast: IconBreakfast, pizza: IconPizza,
+}
 const COLOR_PALETTE  = ['#e8975a','#14b8a6','#6366f1','#ef4444','#22c55e','#f59e0b','#ec4899','#8b5cf6']
 
 const IconWifi = () => (
@@ -123,12 +158,13 @@ function TableRow({ table, index, onRename, onDelete, autoEdit }) {
 }
 
 // ── Category card ─────────────────────────────────────────────────
-function CategoryCard({ cat, autoEdit, onRename, onColorChange, onDelete }) {
-  const [editing, setEditing]       = useState(false)
-  const [draft, setDraft]           = useState(cat.name)
-  const [showPicker, setShowPicker] = useState(false)
-  const inputRef                    = useRef(null)
-  const CatIcon                     = CATEGORY_ICONS[cat.icon] || IconCoffee
+function CategoryCard({ cat, autoEdit, onRename, onColorChange, onIconChange, onDelete }) {
+  const [editing,        setEditing]        = useState(false)
+  const [draft,          setDraft]          = useState(cat.name)
+  const [showPicker,     setShowPicker]     = useState(false)
+  const [showIconPicker, setShowIconPicker] = useState(false)
+  const inputRef                            = useRef(null)
+  const CatIcon                             = CATEGORY_ICONS[cat.icon] || IconCoffee
 
   useEffect(() => { if (autoEdit) setEditing(true) }, [autoEdit])
   useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
@@ -147,7 +183,7 @@ function CategoryCard({ cat, autoEdit, onRename, onColorChange, onDelete }) {
         <button
           className="st-cat-dot"
           style={{ backgroundColor: cat.color }}
-          onClick={() => setShowPicker(p => !p)}
+          onClick={() => { setShowPicker(p => !p); setShowIconPicker(false) }}
           title="Rengi değiştir"
         />
         {showPicker && (
@@ -164,9 +200,31 @@ function CategoryCard({ cat, autoEdit, onRename, onColorChange, onDelete }) {
         )}
       </div>
 
-      {/* Icon */}
-      <div className="st-cat-icon" style={{ color: cat.color }}>
-        <CatIcon />
+      {/* Icon + picker */}
+      <div className="st-cat-icon-wrap">
+        <button
+          className="st-cat-icon"
+          style={{ color: cat.color }}
+          onClick={() => { setShowIconPicker(p => !p); setShowPicker(false) }}
+          title="İkonu değiştir"
+        >
+          <CatIcon />
+        </button>
+        {showIconPicker && (
+          <div className="st-icon-picker">
+            {Object.entries(CATEGORY_ICONS).map(([key, Icon]) => (
+              <button
+                key={key}
+                className={`st-icon-swatch ${cat.icon === key ? 'st-icon-swatch--active' : ''}`}
+                style={{ color: cat.icon === key ? cat.color : 'var(--color-text-muted)' }}
+                onClick={() => { onIconChange(cat.id, key); setShowIconPicker(false) }}
+                title={key}
+              >
+                <Icon />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Name */}
@@ -197,13 +255,14 @@ function Settings() {
   const {
     tableDefs,  addTableDef,  editTableDef,  removeTableDef,
     categories, addCategory,  editCategory,  removeCategory,
-    isSyncing, lastSyncAt, unsyncedCount, triggerSync,
+    isSyncing, lastSyncAt, unsyncedCount, triggerSync, resetAllData,
+    kdvRate, setKdvRatePersist,
   } = useApp()
   const { isOnline } = useOnlineStatus()
 
-  const [cafeName, setCafeName] = useState('Artisan Brew Co.')
-  const [phone, setPhone]       = useState('+90 212 555 12 34')
-  const [address, setAddress]   = useState('Karaköy Mah. Şair Nedim Cad.\nNo:12, Beyoğlu, İstanbul')
+  const [cafeName, setCafeName] = useState('San-Lucas Cafe.')
+  const [phone, setPhone]       = useState('+90 ...')
+  const [address, setAddress]   = useState('Sivas')
 
   const [activeSection,   setActiveSection]   = useState('cafe')
   const [autoEditTableId, setAutoEditTableId] = useState(null)
@@ -273,6 +332,10 @@ function Settings() {
   const handleDeleteCategory = async (id) => {
     await removeCategory(id)
     setAutoEditCatId(null)
+  }
+  const handleIconChange = async (id, icon) => {
+    const cat = categories.find(c => c.id === id)
+    if (cat) await editCategory(id, { name: cat.name, color: cat.color, icon })
   }
 
   const handleSave   = () => console.log('[Settings] saved cafe info', { cafeName, phone, address })
@@ -385,6 +448,7 @@ function Settings() {
                   autoEdit={cat.id === autoEditCatId}
                   onRename={handleRenameCategory}
                   onColorChange={handleChangeColor}
+                  onIconChange={handleIconChange}
                   onDelete={handleDeleteCategory}
                 />
               ))}
@@ -431,8 +495,19 @@ function Settings() {
             <h2 className="settings-card__title">Sistem</h2>
             <div className="st-sistem-grid">
               <div>
-                <label className="settings-label">Para Birimi Formatı</label>
-                <div className="st-currency-display">1.250,00 ₺</div>
+                <label className="settings-label">KDV Oranı</label>
+                <div className="st-kdv-row">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    className="settings-input st-kdv-input"
+                    value={kdvRate}
+                    onChange={e => setKdvRatePersist(e.target.value)}
+                  />
+                  <span className="st-kdv-suffix">%</span>
+                </div>
               </div>
               <div>
                 <label className="settings-label">Hızlı İşlemler</label>
@@ -447,8 +522,14 @@ function Settings() {
                     <span>Güncelleme Kontrol Et</span>
                     <span className="st-version-badge">v1.0.0</span>
                   </button>
-                  <button className="st-quick-row st-quick-row--danger">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  <button
+                    className="st-quick-row st-quick-row--danger"
+                    onClick={async () => {
+                      if (!window.confirm('Tüm ürünler, kategoriler ve siparişler silinecek. Masalar korunacak. Emin misiniz?')) return
+                      await resetAllData()
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                     <span>Tüm Verileri Sıfırla</span>
                   </button>
                 </div>

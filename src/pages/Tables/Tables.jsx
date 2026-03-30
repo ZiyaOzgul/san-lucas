@@ -9,84 +9,14 @@ import PaymentModal from '../../components/PaymentModal/PaymentModal.jsx'
 import QRApprovalModal from '../../components/QRApprovalModal/QRApprovalModal.jsx'
 import './Tables.css'
 
-// Demo session runtime states (keyed by tableDef.id matching AppContext SEED_TABLE_DEFS)
-// id 1=T-01, 2=T-03, 3=T-04, 4=T-05, 5=T-06, 6=T-08, 7=T-09, 8=T-10, 9=T-12
-const DEMO_RUNTIME = {
-  1: {
-    status: 'occupied', type: 'normal', openMinutes: 18, openTime: '14:34', waiter: 'Ahmet B.',
-    taxRate: 0.10,
-    orderItems: [
-      { id: 1, name: 'Türk Kahvesi', note: 'Az şekerli', qty: 2, unitPrice: 35 },
-      { id: 2, name: 'Su Böreği',    note: '',           qty: 1, unitPrice: 55 },
-    ],
-  },
-  2: {
-    status: 'occupied', type: 'normal', openMinutes: 45, openTime: '14:07', waiter: 'Selin K.',
-    taxRate: 0.10,
-    orderItems: [
-      { id: 1, name: 'Cappuccino',             note: '',                  qty: 2, unitPrice: 75  },
-      { id: 2, name: 'Eggs Benedict',          note: 'Extra hollandaise', qty: 1, unitPrice: 130 },
-      { id: 3, name: 'Taze Sıkılmış Portakal', note: '',                  qty: 2, unitPrice: 55  },
-      { id: 4, name: 'Croissant',              note: 'Tereyağlı',        qty: 1, unitPrice: 42  },
-    ],
-  },
-  3: {
-    status: 'occupied', type: 'normal', openMinutes: 32, openTime: '14:20', waiter: 'Selin K.',
-    taxRate: 0.10,
-    discount: { label: 'Kampanya İndirimi', amount: 30 },
-    orderItems: [
-      { id: 1, name: 'Caffè Latte',              note: '+ Yulaf Sütü, Vanilya Şurubu', qty: 2, unitPrice: 85  },
-      { id: 2, name: 'Artisan Avokado Toast',    note: 'Ekstra Haşlanmış Yumurta',     qty: 1, unitPrice: 145 },
-      { id: 3, name: 'Filtre Kahve',             note: 'Etiyopya Kochere',             qty: 1, unitPrice: 65  },
-      { id: 4, name: 'San Sebastian Cheesecake', note: 'Çikolata Soslu',               qty: 2, unitPrice: 120 },
-    ],
-  },
-  // 4 = T-05 → empty (no runtime entry)
-  // 5 = T-06 → empty
-  6: {
-    status: 'occupied', type: 'alert', openMinutes: 160, openTime: '11:52', waiter: 'Ahmet B.',
-    taxRate: 0.10,
-    orderItems: [
-      { id: 1, name: 'Latte Macchiato', note: 'Soya sütü',       qty: 2, unitPrice: 75  },
-      { id: 2, name: 'Pancake Stack',   note: 'Akçaağaç şurubu', qty: 2, unitPrice: 110 },
-      { id: 3, name: 'Meyve Tabağı',   note: '',                 qty: 1, unitPrice: 95  },
-      { id: 4, name: 'Sıcak Çikolata', note: 'Kremalı',          qty: 2, unitPrice: 65  },
-      { id: 5, name: 'Brownie',         note: 'Dondurmalı',      qty: 1, unitPrice: 75  },
-    ],
-  },
-  7: {
-    status: 'occupied', type: 'qr', openMinutes: 3,
-    orderItems: [
-      { id: 1, name: 'Flat White',    note: '',          qty: 2, unitPrice: 70 },
-      { id: 2, name: 'Avokado Toast', note: 'Limon ile', qty: 1, unitPrice: 95 },
-    ],
-  },
-  8: {
-    status: 'occupied', type: 'alert', openMinutes: 135, openTime: '12:17', waiter: 'Mehmet Y.',
-    taxRate: 0.10,
-    orderItems: [
-      { id: 1, name: 'Americano',    note: '',              qty: 3, unitPrice: 55  },
-      { id: 2, name: 'Club Sandwich', note: 'Ekstra peynir', qty: 2, unitPrice: 110 },
-      { id: 3, name: 'Tiramisu',     note: '',              qty: 1, unitPrice: 85  },
-      { id: 4, name: 'Limonata',     note: 'Buzlu',         qty: 2, unitPrice: 45  },
-    ],
-  },
-  9: {
-    status: 'occupied', type: 'qr', openMinutes: 1,
-    orderItems: [
-      { id: 1, name: 'Espresso',   note: 'Doppio',      qty: 1, unitPrice: 45 },
-      { id: 2, name: 'Cheesecake', note: 'Frambuazlı',  qty: 1, unitPrice: 95 },
-    ],
-  },
-}
 
 function getLiveTime() {
   return new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
 }
 
 function Tables() {
-  const { tableDefs } = useApp()
-  const [runtimeStates,  setRuntimeStates]  = useState(DEMO_RUNTIME)
+  const { tableDefs, triggerSync, isOnline, kdvRate } = useApp()
+  const [runtimeStates,  setRuntimeStates]  = useState({})
   const [clock,          setClock]          = useState(getLiveTime)
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [paymentTable,   setPaymentTable]   = useState(null)
@@ -114,29 +44,64 @@ function Tables() {
       .channel('qr-orders-alert')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'orders', filter: 'status=eq.active' },
-        (payload) => {
+        { event: 'INSERT', schema: 'public', table: 'orders', filter: 'status=eq.pending' },
+        async (payload) => {
           playAlertSound()
           const newOrder = payload.new
-          if (newOrder?.table_id) {
-            setRuntimeStates(prev => ({
-              ...prev,
-              [newOrder.table_id]: {
-                ...(prev[newOrder.table_id] ?? {}),
-                status:   'occupied',
-                tableId:  newOrder.table_id,
-                type:     'qr',
-                openedAt: newOrder.created_at ?? new Date().toISOString(),
-                orderItems: [],
-              },
-            }))
+          if (!newOrder?.table_id) return
+
+          const openMinutes = newOrder.created_at
+            ? Math.max(0, Math.floor((Date.now() - new Date(newOrder.created_at).getTime()) / 60000))
+            : 0
+
+          let orderItems = []
+          try {
+            const { data } = await supabase
+              .from('order_items')
+              .select('id, quantity, unit_price, products(name)')
+              .eq('order_id', newOrder.id)
+            if (data) {
+              orderItems = data.map(item => ({
+                id:        item.id,
+                name:      item.products?.name ?? 'Ürün',
+                qty:       item.quantity,
+                unitPrice: item.unit_price,
+                note:      '',
+              }))
+            }
+          } catch (e) {
+            console.warn('[Tables] Could not fetch QR order items', e)
           }
+
+          setRuntimeStates(prev => ({
+            ...prev,
+            [newOrder.table_id]: {
+              ...(prev[newOrder.table_id] ?? {}),
+              status:     'occupied',
+              type:       'qr',
+              orderId:    newOrder.id,
+              openMinutes,
+              orderItems,
+            },
+          }))
         }
       )
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
   }, [])
+
+  // Auto-open QR approval modal when a new QR order arrives
+  useEffect(() => {
+    if (qrTable) return  // modal already open — don't interrupt
+    const entry = Object.entries(runtimeStates).find(
+      ([, s]) => s.type === 'qr' && s.status === 'occupied'
+    )
+    if (!entry) return
+    const [tableId, state] = entry
+    const def = tableDefs.find(t => t.id === Number(tableId))
+    if (def) setQrTable({ ...def, ...state })
+  }, [runtimeStates]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Merge tableDefs with runtime states — new tables from Settings appear as empty
   const displayTables = tableDefs.map(def => ({
@@ -172,7 +137,7 @@ function Tables() {
             openTime: getLiveTime(),
             openMinutes: 0,
             waiter: '—',
-            taxRate: 0.10,
+            taxRate: kdvRate / 100,
             orderItems: [{ id: product.id, name: product.name, unitPrice: product.price, qty: 1, note: '' }],
           },
         }
@@ -223,26 +188,55 @@ function Tables() {
     try {
       await saveCompletedOrder(transactionData)
       refreshRevenue()
+      console.log(`[Tables] ✓ Order completed — Masa ${transactionData.tableId} | ₺${transactionData.total?.toFixed(2)} | ${transactionData.paymentMethod}`)
+      if (transactionData.supabaseOrderId && isSupabaseReady) {
+        await supabase
+          .from('orders')
+          .update({
+            status: 'completed',
+            payment_method: transactionData.paymentMethod,
+            total: transactionData.total,
+            closed_at: transactionData.closedAt,
+          })
+          .eq('id', transactionData.supabaseOrderId)
+      }
+      if (isOnline) triggerSync()
     } catch (e) {
       console.error('[Tables] Failed to save order to DB', e)
     }
   }
 
-  const handleQRApprove = () => {
+  const handleQRApprove = async () => {
+    const orderId = qrTable?.orderId
     setRuntimeStates(prev => ({
       ...prev,
       [qrTable.id]: { ...prev[qrTable.id], type: 'normal', openTime: getLiveTime(), waiter: 'Garson' },
     }))
     setQrTable(null)
+    if (orderId && isSupabaseReady) {
+      try {
+        await supabase.from('orders').update({ status: 'active' }).eq('id', orderId)
+      } catch (e) {
+        console.warn('[Tables] Could not update QR order status to active', e)
+      }
+    }
   }
 
-  const handleQRReject = () => {
+  const handleQRReject = async () => {
+    const orderId = qrTable?.orderId
     setRuntimeStates(prev => {
       const next = { ...prev }
       delete next[qrTable.id]
       return next
     })
     setQrTable(null)
+    if (orderId && isSupabaseReady) {
+      try {
+        await supabase.from('orders').update({ status: 'cancelled' }).eq('id', orderId)
+      } catch (e) {
+        console.warn('[Tables] Could not update QR order status to cancelled', e)
+      }
+    }
   }
 
   return (

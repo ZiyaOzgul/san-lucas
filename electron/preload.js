@@ -13,5 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       if (!srcPath) return null
       return ipcRenderer.invoke('images:save', srcPath)
     },
+    readFileBytes: (relativePath) => ipcRenderer.invoke('images:readFileBytes', relativePath),
+    deleteFile:    (relativePath) => ipcRenderer.invoke('images:delete', relativePath),
   },
 })

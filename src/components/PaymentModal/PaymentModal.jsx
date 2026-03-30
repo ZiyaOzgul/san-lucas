@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useApp } from '../../context/AppContext.jsx'
 import './PaymentModal.css'
 
 const PAYMENT_METHODS = [
@@ -38,13 +39,15 @@ const PAYMENT_METHODS = [
 const NUMPAD_KEYS = ['1','2','3','4','5','6','7','8','9','C','0','⌫']
 
 function PaymentModal({ table, onClose, onComplete }) {
+  const { kdvRate } = useApp()
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [cashInput,     setCashInput]     = useState('')
   const [splitCash,     setSplitCash]     = useState('')
 
+  const taxDecimal = kdvRate / 100
   const items = table.orderItems || []
   const subtotal = items.reduce((s, i) => s + i.qty * i.unitPrice, 0)
-  const tax      = Math.round(subtotal * (table.taxRate ?? 0.10) * 100) / 100
+  const tax      = Math.round(subtotal * taxDecimal * 100) / 100
   const discount = table.discount?.amount ?? 0
   const total    = subtotal + tax - discount
 
@@ -80,6 +83,7 @@ function PaymentModal({ table, onClose, onComplete }) {
     onComplete({
       tableId: table.id,
       tableName: table.name,
+      supabaseOrderId: table.orderId ?? null,
       items,
       subtotal,
       tax,
@@ -155,7 +159,7 @@ function PaymentModal({ table, onClose, onComplete }) {
                 <span>₺{subtotal.toFixed(2)}</span>
               </div>
               <div className="pm-totals__row">
-                <span>KDV (%{Math.round((table.taxRate ?? 0.10) * 100)})</span>
+                <span>KDV (%{kdvRate})</span>
                 <span>₺{tax.toFixed(2)}</span>
               </div>
               {discount > 0 && (
@@ -172,7 +176,7 @@ function PaymentModal({ table, onClose, onComplete }) {
             <div className="pm-amount-card">
               <span className="pm-amount-label">ÖDENECEK TOPLAM</span>
               <span className="pm-amount-value">₺{total.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
-              <span className="pm-loyalty-badge">Sadakat Puanı: +{Math.floor(total / 50)}</span>
+              
             </div>
 
             {/* Payment methods */}
@@ -271,24 +275,7 @@ function PaymentModal({ table, onClose, onComplete }) {
               </>
             )}
 
-            {/* Action buttons */}
-            <div className="pm-actions">
-              <button className="pm-action-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 6 2 18 2 18 9" />
-                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                  <rect x="6" y="14" width="12" height="8" />
-                </svg>
-                Fiş Yazdır
-              </button>
-              <button className="pm-action-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                  <polyline points="22,6 12,13 2,6" />
-                </svg>
-                E-Fatura
-              </button>
-            </div>
+          
 
             <button
               className={`pm-complete-btn ${!canComplete ? 'pm-complete-btn--disabled' : ''}`}
