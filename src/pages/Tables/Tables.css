@@ -150,6 +150,63 @@
   background-color: #2d2d4e;
 }
 
+/* ── Filter tabs ── */
+.tables-filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tables-filter-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.tables-filter-tab:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.tables-filter-tab--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+.tables-filter-tab__count {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.tables-filter-tab--active .tables-filter-tab__count {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.tables-filter-tab__count--open {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.tables-filter-tab--active .tables-filter-tab__count--open {
+  background: var(--color-success);
+  color: #fff;
+}
+
 /* ── Table grid ── */
 .tables-grid {
   display: grid;

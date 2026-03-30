@@ -21,6 +21,7 @@ function Tables() {
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [paymentTable,   setPaymentTable]   = useState(null)
   const [qrTable,        setQrTable]        = useState(null)
+  const [tableFilter,    setTableFilter]    = useState('all') // 'all' | 'open'
   const [dailyRevenue,   setDailyRevenue]   = useState(0)
 
   const refreshRevenue = useCallback(() => {
@@ -108,6 +109,10 @@ function Tables() {
     ...def,
     ...(runtimeStates[def.id] ?? { status: 'empty' }),
   }))
+
+  const visibleTables = tableFilter === 'open'
+    ? displayTables.filter(t => t.status === 'occupied')
+    : displayTables
 
   const selectedTable = selectedTableId !== null
     ? displayTables.find(t => t.id === selectedTableId) ?? null
@@ -280,9 +285,27 @@ function Tables() {
           </div>
         </div>
 
+        {/* ── Filter tabs ── */}
+        <div className="tables-filter-tabs">
+          <button
+            className={`tables-filter-tab ${tableFilter === 'all' ? 'tables-filter-tab--active' : ''}`}
+            onClick={() => setTableFilter('all')}
+          >
+            Tüm Masalar
+            <span className="tables-filter-tab__count">{displayTables.length}</span>
+          </button>
+          <button
+            className={`tables-filter-tab ${tableFilter === 'open' ? 'tables-filter-tab--active' : ''}`}
+            onClick={() => setTableFilter('open')}
+          >
+            Açık Masalar
+            <span className="tables-filter-tab__count tables-filter-tab__count--open">{aktif}</span>
+          </button>
+        </div>
+
         {/* ── Table Grid ── */}
         <div className="tables-grid">
-          {displayTables.map(table => (
+          {visibleTables.map(table => (
             <TableCard
               key={table.id}
               table={{
