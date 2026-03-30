@@ -121,6 +121,26 @@
   color: var(--color-accent);
 }
 
+.settings-subnav__icon-img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  filter: brightness(0) opacity(0.55);
+  flex-shrink: 0;
+}
+
+.settings-subnav__item--active .settings-subnav__icon-img {
+  filter: brightness(0) saturate(100%) invert(62%) sepia(60%) saturate(500%) hue-rotate(345deg) brightness(95%);
+}
+
+.settings-subnav__item:hover .settings-subnav__icon-img {
+  filter: brightness(0) opacity(0.75);
+}
+
+.settings-subnav__item--active:hover .settings-subnav__icon-img {
+  filter: brightness(0) saturate(100%) invert(62%) sepia(60%) saturate(500%) hue-rotate(345deg) brightness(95%);
+}
+
 /* ── Content ── */
 .settings-content {
   flex: 1;
@@ -193,29 +213,46 @@
 
 /* Logo zone */
 .settings-logo-zone {
-  border: 1.5px dashed var(--color-border);
-  border-radius: var(--radius-card);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 20px;
-  cursor: pointer;
-  transition: border-color 0.15s;
-  text-align: center;
+  padding: 16px;
 }
 
-.settings-logo-zone:hover { border-color: var(--color-accent); }
+.settings-logo-img {
+  width: 100%;
+  max-width: 180px;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius-card);
+}
 
-.settings-logo-placeholder {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  background-color: var(--color-bg-page);
+/* ── Cafe info static display ── */
+.settings-cafe-info {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.settings-info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-info-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.settings-info-value {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.5;
 }
 
 .settings-logo-hint {

@@ -10,9 +10,7 @@ const IconBriefcase = () => (
   </svg>
 )
 const IconGrid = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
-  </svg>
+  <img src="/icons/tables.png" alt="" className="settings-subnav__icon-img" />
 )
 const IconTag = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -260,10 +258,6 @@ function Settings() {
   } = useApp()
   const { isOnline } = useOnlineStatus()
 
-  const [cafeName, setCafeName] = useState('San-Lucas Cafe.')
-  const [phone, setPhone]       = useState('+90 ...')
-  const [address, setAddress]   = useState('Sivas')
-
   const [activeSection,   setActiveSection]   = useState('cafe')
   const [autoEditTableId, setAutoEditTableId] = useState(null)
   const [autoEditCatId,   setAutoEditCatId]   = useState(null)
@@ -338,9 +332,6 @@ function Settings() {
     if (cat) await editCategory(id, { name: cat.name, color: cat.color, icon })
   }
 
-  const handleSave   = () => console.log('[Settings] saved cafe info', { cafeName, phone, address })
-  const handleCancel = () => window.location.reload()
-
   return (
     <div className="settings-page">
 
@@ -385,26 +376,22 @@ function Settings() {
           <div ref={sectionRefs.cafe} className="settings-card">
             <h2 className="settings-card__title">Cafe Bilgileri</h2>
             <div className="settings-cafe-grid">
-              <div className="settings-cafe-fields">
-                <div className="settings-field">
-                  <label className="settings-label">Cafe Adı</label>
-                  <input className="settings-input" value={cafeName} onChange={e => setCafeName(e.target.value)} />
+              <div className="settings-cafe-info">
+                <div className="settings-info-row">
+                  <span className="settings-info-label">Cafe Adı</span>
+                  <span className="settings-info-value">San Lucas Cafe</span>
                 </div>
-                <div className="settings-field">
-                  <label className="settings-label">Telefon</label>
-                  <input className="settings-input" value={phone} onChange={e => setPhone(e.target.value)} />
+                <div className="settings-info-row">
+                  <span className="settings-info-label">Telefon</span>
+                  <span className="settings-info-value">0546 933 29 50</span>
                 </div>
-                <div className="settings-field">
-                  <label className="settings-label">Adres</label>
-                  <textarea className="settings-input settings-textarea" value={address} onChange={e => setAddress(e.target.value)} rows={3} />
+                <div className="settings-info-row">
+                  <span className="settings-info-label">Adres</span>
+                  <span className="settings-info-value">Belkent caddesi üniversite karşısı fonten binaları, a blok altı, 58400 Şarkışla/Sivas</span>
                 </div>
               </div>
               <div className="settings-logo-zone">
-                <div className="settings-logo-placeholder">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                </div>
-                <p className="settings-logo-hint">Logo yüklemek için tıklayın veya sürükleyin.</p>
-                <p className="settings-logo-hint settings-logo-hint--small">(PNG, JPG - Max 2MB)</p>
+                <img src="/san-lucas-logo.png" alt="San Lucas Cafe Logo" className="settings-logo-img" />
               </div>
             </div>
           </div>
@@ -535,12 +522,6 @@ function Settings() {
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* ── Footer ── */}
-          <div className="settings-footer">
-            <button className="settings-footer__cancel" onClick={handleCancel}>Vazgeç</button>
-            <button className="settings-footer__save" onClick={handleSave}>Değişiklikleri Kaydet</button>
           </div>
 
         </div>

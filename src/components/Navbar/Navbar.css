@@ -77,6 +77,26 @@
   flex-shrink: 0;
 }
 
+.navbar__icon-img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  filter: brightness(0) opacity(0.45);
+  transition: filter 0.15s ease;
+}
+
+.navbar__item--active .navbar__icon-img {
+  filter: brightness(0) invert(1);
+}
+
+.navbar__item:hover .navbar__icon-img {
+  filter: brightness(0) opacity(0.75);
+}
+
+.navbar__item--active:hover .navbar__icon-img {
+  filter: brightness(0) invert(1);
+}
+
 .navbar__label {
   font-size: 14px;
   font-weight: 500;

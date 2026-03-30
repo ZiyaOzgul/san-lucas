@@ -20,6 +20,24 @@
     "sql.js": "^1.10.3",
     "ws": "^8.16.0"
   },
+  "build": {
+    "appId": "com.sanlucas.cafe",
+    "productName": "San Lucas Cafe",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/san-lucas-logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/react": "^19.2.14",
