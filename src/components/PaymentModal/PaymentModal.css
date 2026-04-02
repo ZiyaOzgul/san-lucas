@@ -529,6 +529,38 @@
   background-color: var(--color-accent);
 }
 
+/* ── Kasiyer picker ── */
+.pm-kasiyer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pm-kasiyer__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.pm-kasiyer__select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+}
+
+.pm-kasiyer__select:focus {
+  border-color: var(--color-accent);
+}
+
 /* ── Footer ── */
 .pm-footer {
   display: flex;

@@ -150,6 +150,37 @@
   background-color: #2d2d4e;
 }
 
+/* ── Low stock banner ── */
+.tables-low-stock-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 28px 8px;
+  padding: 10px 16px;
+  background: var(--color-warning-light);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-input);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.tables-low-stock-banner__close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tables-low-stock-banner__close:hover {
+  background: rgba(0,0,0,0.08);
+}
+
 /* ── Filter tabs ── */
 .tables-filter-tabs {
   display: flex;

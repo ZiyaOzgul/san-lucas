@@ -2,10 +2,40 @@ import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import './OrderPanel.css'
 
+function VariantPicker({ product, variants, onSelect, onClose }) {
+  return (
+    <div className="variant-picker-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="variant-picker">
+        <div className="variant-picker__header">
+          <span className="variant-picker__title">{product.name}</span>
+          <button className="om-close-btn" onClick={onClose}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div className="variant-picker__list">
+          {variants.map(v => (
+            <button
+              key={v.id}
+              className="variant-picker__item"
+              onClick={() => onSelect(v)}
+            >
+              <span className="variant-picker__item-name">{v.name}</span>
+              <span className="variant-picker__item-price">₺{v.price.toLocaleString('tr-TR')}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function OrderPanel({ table, onClose, onCloseTable, onAddItem, onUpdateQty, onRemoveItem }) {
-  const { products, categories } = useApp()
-  const [search,      setSearch]      = useState('')
-  const [activeCatId, setActiveCatId] = useState(null)
+  const { products, categories, productVariants } = useApp()
+  const [search,             setSearch]             = useState('')
+  const [activeCatId,        setActiveCatId]        = useState(null)
+  const [variantPickerProduct, setVariantPickerProduct] = useState(null)
 
   const orderItems = table.orderItems ?? []
   const subtotal   = orderItems.reduce((s, i) => s + i.qty * i.unitPrice, 0)
@@ -20,7 +50,28 @@ function OrderPanel({ table, onClose, onCloseTable, onAddItem, onUpdateQty, onRe
     return matchCat && matchSearch
   })
 
-  const getOrderItem = (productId) => orderItems.find(i => i.id === productId)
+  const getOrderItem = (itemId) => orderItems.find(i => i.id === itemId)
+
+  const handleProductClick = (p) => {
+    const variants = productVariants[p.id]
+    if (variants?.length) {
+      setVariantPickerProduct(p)
+    } else {
+      onAddItem(table.id, p)
+    }
+  }
+
+  const handleVariantSelect = (variant) => {
+    const p = variantPickerProduct
+    onAddItem(table.id, {
+      id:        variant.id,
+      productId: p.id,
+      name:      `${p.name} (${variant.name})`,
+      price:     variant.price,
+      variantId: variant.id,
+    })
+    setVariantPickerProduct(null)
+  }
 
   // Category color for active tab
   const activeCatColor = categories.find(c => c.id === activeCatId)?.color ?? null
@@ -150,32 +201,39 @@ function OrderPanel({ table, onClose, onCloseTable, onAddItem, onUpdateQty, onRe
 
           <div className="om-picker__grid">
             {filteredProducts.map(p => {
-              const orderItem  = getOrderItem(p.id)
-              const inOrder    = !!orderItem
-              const outOfStock = p.stock === 0
+              const variants  = productVariants[p.id] ?? []
+              const hasVariants = variants.length > 0
+              // Count how many order items belong to this product
+              const orderCount = hasVariants
+                ? orderItems.filter(i => variants.some(v => v.id === i.id)).reduce((s, i) => s + i.qty, 0)
+                : (orderItems.find(i => i.id === p.id)?.qty ?? 0)
+              const inOrder = orderCount > 0
 
-              // Category color for no-image fallback background
               const cat      = categories.find(c => c.id === p.categoryId)
               const catColor = cat?.color ?? '#e8975a'
+              const priceLabel = hasVariants
+                ? `₺${Math.min(...variants.map(v => v.price)).toLocaleString('tr-TR')} +`
+                : `₺${p.price.toLocaleString('tr-TR')}`
 
               return (
                 <button
                   key={p.id}
-                  className={`op-product ${inOrder ? 'op-product--in-order' : ''} ${outOfStock ? 'op-product--out' : ''}`}
+                  className={`op-product ${inOrder ? 'op-product--in-order' : ''}`}
                   style={p.imageUrl
                     ? { backgroundImage: `url(${p.imageUrl})` }
                     : { '--product-bg': catColor }
                   }
-                  onClick={() => !outOfStock && onAddItem(table.id, p)}
+                  onClick={() => handleProductClick(p)}
                 >
                   {inOrder && (
-                    <span className="op-product__badge">{orderItem.qty}×</span>
+                    <span className="op-product__badge">{orderCount}×</span>
+                  )}
+                  {hasVariants && (
+                    <span className="op-product__variant-indicator">▾</span>
                   )}
                   <div className="op-product__overlay">
                     <span className="op-product__name">{p.name}</span>
-                    <span className="op-product__price">
-                      {outOfStock ? 'Tükendi' : `₺${p.price.toLocaleString('tr-TR')}`}
-                    </span>
+                    <span className="op-product__price">{priceLabel}</span>
                   </div>
                 </button>
               )
@@ -187,6 +245,16 @@ function OrderPanel({ table, onClose, onCloseTable, onAddItem, onUpdateQty, onRe
 
         </div>
       </div>
+
+      {/* ── Variant picker popup ── */}
+      {variantPickerProduct && (
+        <VariantPicker
+          product={variantPickerProduct}
+          variants={productVariants[variantPickerProduct.id] ?? []}
+          onSelect={handleVariantSelect}
+          onClose={() => setVariantPickerProduct(null)}
+        />
+      )}
     </div>
   )
 }

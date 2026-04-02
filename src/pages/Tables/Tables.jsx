@@ -23,6 +23,7 @@ function Tables() {
   const [qrTable,        setQrTable]        = useState(null)
   const [tableFilter,    setTableFilter]    = useState('all') // 'all' | 'open'
   const [dailyRevenue,   setDailyRevenue]   = useState(0)
+  const [lowStockAlerts, setLowStockAlerts] = useState([])
 
   const refreshRevenue = useCallback(() => {
     if (isDbInitialized()) setDailyRevenue(getDailyRevenue())
@@ -130,10 +131,18 @@ function Tables() {
 
   // ── Item management ─────────────────────────────────────────────
   const handleAddItem = (tableId, product) => {
+    const newItem = {
+      id:        product.id,
+      productId: product.productId ?? product.id,
+      name:      product.name,
+      unitPrice: product.price,
+      qty:       1,
+      note:      '',
+      variantId: product.variantId ?? null,
+    }
     setRuntimeStates(prev => {
       const existing = prev[tableId]
       if (!existing) {
-        // Empty table → open it
         return {
           ...prev,
           [tableId]: {
@@ -143,7 +152,7 @@ function Tables() {
             openMinutes: 0,
             waiter: '—',
             taxRate: kdvRate / 100,
-            orderItems: [{ id: product.id, name: product.name, unitPrice: product.price, qty: 1, note: '' }],
+            orderItems: [newItem],
           },
         }
       }
@@ -151,7 +160,7 @@ function Tables() {
       const found = existing.orderItems?.find(i => i.id === product.id)
       const newItems = found
         ? existing.orderItems.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i)
-        : [...(existing.orderItems ?? []), { id: product.id, name: product.name, unitPrice: product.price, qty: 1, note: '' }]
+        : [...(existing.orderItems ?? []), newItem]
       return { ...prev, [tableId]: { ...existing, status: 'occupied', orderItems: newItems } }
     })
   }
@@ -191,8 +200,9 @@ function Tables() {
     setPaymentTable(null)
     setSelectedTableId(null)
     try {
-      await saveCompletedOrder(transactionData)
+      const { lowStockWarnings } = await saveCompletedOrder(transactionData)
       refreshRevenue()
+      if (lowStockWarnings?.length) setLowStockAlerts(lowStockWarnings)
       console.log(`[Tables] ✓ Order completed — Masa ${transactionData.tableId} | ₺${transactionData.total?.toFixed(2)} | ${transactionData.paymentMethod}`)
       if (transactionData.supabaseOrderId && isSupabaseReady) {
         await supabase
@@ -285,7 +295,15 @@ function Tables() {
           </div>
         </div>
 
-        {/* ── Filter tabs ── */}
+        {/* ── Low stock alert ── */}
+      {lowStockAlerts.length > 0 && (
+        <div className="tables-low-stock-banner">
+          <span>⚠ Düşük stok: {lowStockAlerts.map(a => `${a.name} (${a.stockAmount} kaldı)`).join(', ')}</span>
+          <button className="tables-low-stock-banner__close" onClick={() => setLowStockAlerts([])}>✕</button>
+        </div>
+      )}
+
+      {/* ── Filter tabs ── */}
         <div className="tables-filter-tabs">
           <button
             className={`tables-filter-tab ${tableFilter === 'all' ? 'tables-filter-tab--active' : ''}`}

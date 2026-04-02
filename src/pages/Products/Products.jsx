@@ -2,34 +2,35 @@ import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import './Products.css'
 
-function StockBar({ stock }) {
-  const max   = 50
-  const pct   = Math.min((stock / max) * 100, 100)
-  const color = stock === 0 ? 'var(--color-danger)'
-              : stock < 5   ? 'var(--color-danger)'
-              : stock < 10  ? 'var(--color-warning)'
-              :               'var(--color-success)'
-  return (
-    <div className="product-stock-bar">
-      <div className="product-stock-bar__track">
-        <div className="product-stock-bar__fill" style={{ width: `${pct}%`, backgroundColor: color }} />
-      </div>
-      <span className="product-stock-bar__label" style={{ color }}>
-        {stock === 0 ? 'Tükendi' : `${stock} adet`}
-      </span>
-    </div>
-  )
-}
-
 // ── Add/Edit Modal ────────────────────────────────────────────────
-function ProductModal({ product, categories, onSave, onClose }) {
+function ProductModal({ product, categories, ingredients, existingVariants, existingProductIngredients, onSave, onClose }) {
   const isEdit = !!product
   const [name,       setName]       = useState(product?.name       ?? '')
   const [price,      setPrice]      = useState(product?.price      ?? '')
-  const [stock,      setStock]      = useState(product?.stock      ?? '')
   const [categoryId, setCategoryId] = useState(product?.categoryId ?? (categories[0]?.id ?? ''))
   const [imageUrl,   setImageUrl]   = useState(product?.imageUrl   ?? null)
   const [recipe,     setRecipe]     = useState(product?.recipe     ?? '')
+  const [productIngRows, setProductIngRows] = useState(
+    existingProductIngredients?.length
+      ? existingProductIngredients.map(r => ({
+          ingredientId: String(r.ingredientId),
+          amountUsed:   String(r.amountUsed),
+        }))
+      : []
+  )
+  const [variants,   setVariants]   = useState(
+    existingVariants?.length
+      ? existingVariants.map(v => ({
+          id:          v.id,
+          name:        v.name,
+          price:       String(v.price),
+          ingredients: v.ingredients.map(i => ({
+            ingredientId: String(i.ingredientId),
+            amountUsed:   String(i.amountUsed),
+          })),
+        }))
+      : []
+  )
 
   const handleImagePick = async () => {
     if (!window.electronAPI?.images) return
@@ -37,22 +38,71 @@ function ProductModal({ product, categories, onSave, onClose }) {
     if (picked) setImageUrl(picked)
   }
 
+  const addVariant = () => {
+    setVariants(prev => [...prev, { id: `new_${Date.now()}`, name: '', price: '', ingredients: [] }])
+  }
+
+  const removeVariant = (idx) => {
+    setVariants(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const updateVariant = (idx, field, value) => {
+    setVariants(prev => prev.map((v, i) => i === idx ? { ...v, [field]: value } : v))
+  }
+
+  const addIngredientRow = (vIdx) => {
+    setVariants(prev => prev.map((v, i) =>
+      i === vIdx
+        ? { ...v, ingredients: [...v.ingredients, { ingredientId: '', amountUsed: '' }] }
+        : v
+    ))
+  }
+
+  const removeIngredientRow = (vIdx, iIdx) => {
+    setVariants(prev => prev.map((v, i) =>
+      i === vIdx
+        ? { ...v, ingredients: v.ingredients.filter((_, j) => j !== iIdx) }
+        : v
+    ))
+  }
+
+  const updateIngredientRow = (vIdx, iIdx, field, value) => {
+    setVariants(prev => prev.map((v, i) =>
+      i === vIdx
+        ? {
+            ...v,
+            ingredients: v.ingredients.map((r, j) =>
+              j === iIdx ? { ...r, [field]: value } : r
+            ),
+          }
+        : v
+    ))
+  }
+
+  const addProductIngRow    = () => setProductIngRows(prev => [...prev, { ingredientId: '', amountUsed: '' }])
+  const removeProductIngRow = (idx) => setProductIngRows(prev => prev.filter((_, i) => i !== idx))
+  const updateProductIngRow = (idx, field, value) =>
+    setProductIngRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
+
   const handleSave = () => {
     if (!name.trim() || !price) return
     onSave({
-      id:         product?.id ?? Date.now(),
-      name:       name.trim(),
-      price:      parseFloat(price),
-      stock:      parseInt(stock) || 0,
-      categoryId: Number(categoryId),
-      imageUrl:   imageUrl || null,
-      recipe:     recipe.trim() || null,
+      product: {
+        id:         product?.id ?? Date.now(),
+        name:       name.trim(),
+        price:      parseFloat(price),
+        categoryId: Number(categoryId),
+        imageUrl:   imageUrl || null,
+        recipe:     recipe.trim() || null,
+      },
+      variants,
+      productIngRows,
     })
   }
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal product-modal">
+      <div className="modal product-modal product-modal--wide">
         <div className="modal__header">
           <h2 className="modal__title">{isEdit ? 'Ürünü Düzenle' : 'Yeni Ürün Ekle'}</h2>
           <button className="modal__close" onClick={onClose}>✕</button>
@@ -72,15 +122,9 @@ function ProductModal({ product, categories, onSave, onClose }) {
                 ))}
               </select>
             </div>
-            <div className="pm-field-row">
-              <div className="pm-field">
-                <label className="pm-label">Fiyat (₺)</label>
-                <input className="pm-input" type="number" min="0" value={price} onChange={e => setPrice(e.target.value)} placeholder="0" />
-              </div>
-              <div className="pm-field">
-                <label className="pm-label">Başlangıç Stoğu</label>
-                <input className="pm-input" type="number" min="0" value={stock} onChange={e => setStock(e.target.value)} placeholder="0" />
-              </div>
+            <div className="pm-field">
+              <label className="pm-label">Fiyat (₺) <span className="pm-label__hint">— Varyant yoksa</span></label>
+              <input className="pm-input" type="number" min="0" value={price} onChange={e => setPrice(e.target.value)} placeholder="0" />
             </div>
             <div className="pm-field">
               <label className="pm-label">Tarif (opsiyonel)</label>
@@ -89,7 +133,7 @@ function ProductModal({ product, categories, onSave, onClose }) {
                 value={recipe}
                 onChange={e => setRecipe(e.target.value)}
                 placeholder="Malzemeler ve hazırlanış..."
-                rows={4}
+                rows={3}
               />
             </div>
           </div>
@@ -110,6 +154,123 @@ function ProductModal({ product, categories, onSave, onClose }) {
           </div>
         </div>
 
+        {/* ── Variants section ── */}
+        <div className="pm-variants">
+          <div className="pm-variants__header">
+            <span className="pm-label">Varyantlar</span>
+            <button type="button" className="pm-variants__add-btn" onClick={addVariant}>
+              + Varyant Ekle
+            </button>
+          </div>
+
+          {variants.length === 0 && (
+            <p className="pm-variants__empty">Varyant eklenmedi — ürün yukarıdaki fiyatla satılacak.</p>
+          )}
+
+          {variants.map((v, vIdx) => (
+            <div key={v.id} className="pm-variant-row">
+              <div className="pm-variant-row__top">
+                <input
+                  className="pm-input pm-variant-row__name"
+                  placeholder="ör. Küçük"
+                  value={v.name}
+                  onChange={e => updateVariant(vIdx, 'name', e.target.value)}
+                />
+                <div className="pm-variant-row__price-wrap">
+                  <span className="pm-variant-row__currency">₺</span>
+                  <input
+                    className="pm-input pm-variant-row__price"
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={v.price}
+                    onChange={e => updateVariant(vIdx, 'price', e.target.value)}
+                  />
+                </div>
+                <button type="button" className="pm-variant-row__remove" onClick={() => removeVariant(vIdx)} title="Varyantı sil">✕</button>
+              </div>
+
+              {/* Ingredient recipe rows */}
+              <div className="pm-recipe-rows">
+                {v.ingredients.map((r, iIdx) => {
+                  const selIng = ingredients.find(i => String(i.id) === String(r.ingredientId))
+                  return (
+                    <div key={iIdx} className="pm-recipe-row">
+                      <select
+                        className="pm-input pm-recipe-row__select"
+                        value={r.ingredientId}
+                        onChange={e => updateIngredientRow(vIdx, iIdx, 'ingredientId', e.target.value)}
+                      >
+                        <option value="">— Malzeme seç —</option>
+                        {ingredients.map(i => (
+                          <option key={i.id} value={String(i.id)}>{i.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="pm-input pm-recipe-row__amount"
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={r.amountUsed}
+                        onChange={e => updateIngredientRow(vIdx, iIdx, 'amountUsed', e.target.value)}
+                      />
+                      <span className="pm-recipe-row__unit">{selIng?.unit ?? '—'}</span>
+                      <button type="button" className="pm-recipe-row__remove" onClick={() => removeIngredientRow(vIdx, iIdx)}>✕</button>
+                    </div>
+                  )
+                })}
+                <button type="button" className="pm-recipe-row__add" onClick={() => addIngredientRow(vIdx)}>
+                  + Malzeme ekle
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Direct ingredient recipe (no variant needed) ── */}
+        <div className="pm-variants">
+          <div className="pm-variants__header">
+            <span className="pm-label">Malzeme Reçetesi <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--color-text-muted)' }}>(varyant olmadan)</span></span>
+            <button type="button" className="pm-variants__add-btn" onClick={addProductIngRow}>
+              + Malzeme Ekle
+            </button>
+          </div>
+
+          {productIngRows.length === 0 && (
+            <p className="pm-variants__empty">Malzeme eklenmedi — stok düşümü yapılmayacak.</p>
+          )}
+
+          <div className="pm-recipe-rows">
+            {productIngRows.map((r, idx) => {
+              const selIng = ingredients.find(i => String(i.id) === String(r.ingredientId))
+              return (
+                <div key={idx} className="pm-recipe-row">
+                  <select
+                    className="pm-input pm-recipe-row__select"
+                    value={r.ingredientId}
+                    onChange={e => updateProductIngRow(idx, 'ingredientId', e.target.value)}
+                  >
+                    <option value="">— Malzeme seç —</option>
+                    {ingredients.map(i => (
+                      <option key={i.id} value={String(i.id)}>{i.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="pm-input pm-recipe-row__amount"
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={r.amountUsed}
+                    onChange={e => updateProductIngRow(idx, 'amountUsed', e.target.value)}
+                  />
+                  <span className="pm-recipe-row__unit">{selIng?.unit ?? '—'}</span>
+                  <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductIngRow(idx)}>✕</button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="modal__footer">
           <button className="btn btn--secondary" onClick={onClose}>İptal</button>
           <button className="btn btn--primary" onClick={handleSave} disabled={!name.trim() || !price}>Kaydet</button>
@@ -120,7 +281,7 @@ function ProductModal({ product, categories, onSave, onClose }) {
 }
 
 // ── Product Detail Modal ──────────────────────────────────────────
-function ProductDetailModal({ product, category, onClose }) {
+function ProductDetailModal({ product, category, variants, onClose }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal product-detail-modal">
@@ -146,9 +307,26 @@ function ProductDetailModal({ product, category, onClose }) {
                 {category.name}
               </span>
             )}
-            <span className="pdm-price">₺{product.price.toLocaleString('tr-TR')}</span>
+            <span className="pdm-price">
+              {variants?.length
+                ? `₺${Math.min(...variants.map(v => v.price)).toLocaleString('tr-TR')} – ₺${Math.max(...variants.map(v => v.price)).toLocaleString('tr-TR')}`
+                : `₺${product.price.toLocaleString('tr-TR')}`
+              }
+            </span>
           </div>
           <h2 className="pdm-name">{product.name}</h2>
+
+          {variants?.length > 0 && (
+            <div className="pdm-variants">
+              <h3 className="pdm-recipe__title">Varyantlar</h3>
+              {variants.map(v => (
+                <div key={v.id} className="pdm-variant-row">
+                  <span>{v.name}</span>
+                  <span className="pdm-variant-row__price">₺{v.price.toLocaleString('tr-TR')}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {product.recipe && (
             <div className="pdm-recipe">
@@ -164,7 +342,7 @@ function ProductDetailModal({ product, category, onClose }) {
 
 // ── Main Products page ────────────────────────────────────────────
 function Products() {
-  const { categories, products, saveProduct, removeProduct } = useApp()
+  const { categories, products, productVariants, productIngredients, ingredients, saveProduct, removeProduct, saveVariants, saveProductIngredients } = useApp()
 
   const [activeCatId, setActiveCatId] = useState(null)
   const [search,      setSearch]      = useState('')
@@ -180,8 +358,10 @@ function Products() {
 
   const getCategoryForProduct = (catId) => categories.find(c => c.id === catId)
 
-  const handleSave = async (data) => {
-    await saveProduct(data)
+  const handleSave = async ({ product, variants, productIngRows }) => {
+    await saveProduct(product)
+    await saveVariants(product.id, variants)
+    await saveProductIngredients(product.id, productIngRows)
     setEditProduct(undefined)
   }
 
@@ -246,7 +426,11 @@ function Products() {
       {/* ── Product grid ── */}
       <div className="products-grid">
         {filtered.map(product => {
-          const cat = getCategoryForProduct(product.categoryId)
+          const cat      = getCategoryForProduct(product.categoryId)
+          const variants = productVariants[product.id] ?? []
+          const priceLabel = variants.length
+            ? `₺${Math.min(...variants.map(v => v.price)).toLocaleString('tr-TR')}${variants.length > 1 ? ' +' : ''}`
+            : `₺${product.price.toLocaleString('tr-TR')}`
           return (
             <div
               key={product.id}
@@ -275,8 +459,10 @@ function Products() {
                     {cat.name}
                   </span>
                 )}
-                <p className="product-card__price">₺{product.price.toLocaleString('tr-TR')}</p>
-                <StockBar stock={product.stock} />
+                <p className="product-card__price">{priceLabel}</p>
+                {variants.length > 0 && (
+                  <span className="product-card__variants-badge">{variants.length} varyant</span>
+                )}
               </div>
 
               {/* Hover actions */}
@@ -313,6 +499,7 @@ function Products() {
         <ProductDetailModal
           product={viewProduct}
           category={getCategoryForProduct(viewProduct.categoryId)}
+          variants={productVariants[viewProduct.id] ?? []}
           onClose={() => setViewProduct(null)}
         />
       )}
@@ -322,6 +509,9 @@ function Products() {
         <ProductModal
           product={editProduct}
           categories={categories}
+          ingredients={ingredients}
+          existingVariants={editProduct ? (productVariants[editProduct.id] ?? []) : []}
+          existingProductIngredients={editProduct ? (productIngredients[editProduct.id] ?? []) : []}
           onSave={handleSave}
           onClose={() => setEditProduct(undefined)}
         />

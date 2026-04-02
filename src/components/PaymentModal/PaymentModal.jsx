@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
+import { supabase, isSupabaseReady } from '../../lib/supabase.js'
 import './PaymentModal.css'
 
 const PAYMENT_METHODS = [
@@ -43,6 +44,15 @@ function PaymentModal({ table, onClose, onComplete }) {
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [cashInput,     setCashInput]     = useState('')
   const [splitCash,     setSplitCash]     = useState('')
+  const [staffList,     setStaffList]     = useState([])
+  const [selectedWaiter, setSelectedWaiter] = useState('')
+
+  useEffect(() => {
+    if (!isSupabaseReady) return
+    supabase.from('profiles').select('id, full_name').order('full_name').then(({ data }) => {
+      if (data) setStaffList(data.filter(p => p.full_name))
+    })
+  }, [])
 
   const taxDecimal = kdvRate / 100
   const items = table.orderItems || []
@@ -95,6 +105,7 @@ function PaymentModal({ table, onClose, onComplete }) {
       splitCash:    paymentMethod === 'split' ? splitCashNum  : null,
       splitCard:    paymentMethod === 'split' ? splitCardNum  : null,
       closedAt: new Date().toISOString(),
+      waiterName: selectedWaiter || null,
     })
   }
 
@@ -178,6 +189,23 @@ function PaymentModal({ table, onClose, onComplete }) {
               <span className="pm-amount-value">₺{total.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
               
             </div>
+
+            {/* Kasiyer */}
+            {staffList.length > 0 && (
+              <div className="pm-kasiyer">
+                <label className="pm-kasiyer__label">Kasiyer</label>
+                <select
+                  className="pm-kasiyer__select"
+                  value={selectedWaiter}
+                  onChange={e => setSelectedWaiter(e.target.value)}
+                >
+                  <option value="">Seçin...</option>
+                  {staffList.map(s => (
+                    <option key={s.id} value={s.full_name}>{s.full_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Payment methods */}
             <div className="pm-methods">

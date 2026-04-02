@@ -4,6 +4,9 @@ import {
   getAllTableDefs, insertTableDef, updateTableDef, deleteTableDef,
   getAllCategories,  insertCategory,  updateCategory,  deleteCategory,
   getAllProducts,    upsertProduct,   deleteProduct,
+  getAllIngredients, upsertIngredient, deleteIngredient,
+  replaceVariants,  getAllVariantsAll,
+  replaceProductIngredients, getAllProductIngredientsAll,
   getUnsyncedCount, clearAllDataExceptTables,
 } from '../lib/localDb.js'
 import { syncToSupabase, pullFromSupabase } from '../lib/sync.js'
@@ -18,6 +21,9 @@ export function AppProvider({ children }) {
   const [tableDefs,     setTableDefs]     = useState([])
   const [categories,    setCategories]    = useState([])
   const [products,      setProducts]      = useState([])
+  const [ingredients,   setIngredients]   = useState([])
+  const [productVariants, setProductVariants] = useState({}) // { [productId]: Variant[] }
+  const [productIngredients, setProductIngredients] = useState({}) // { [productId]: [{ingredientId,name,unit,amountUsed}] }
   const [isSyncing,     setIsSyncing]     = useState(false)
   const [lastSyncAt,    setLastSyncAt]    = useState(null)
   const [unsyncedCount, setUnsyncedCount] = useState(0)
@@ -45,6 +51,9 @@ export function AppProvider({ children }) {
   const refreshLocalData = useCallback(() => {
     setCategories(getAllCategories())
     setProducts(getAllProducts())
+    setIngredients(getAllIngredients())
+    setProductVariants(getAllVariantsAll())
+    setProductIngredients(getAllProductIngredientsAll())
     setUnsyncedCount(getUnsyncedCount())
   }, [])
 
@@ -73,12 +82,18 @@ export function AppProvider({ children }) {
       setTableDefs(getAllTableDefs())
       setCategories(getAllCategories())
       setProducts(getAllProducts())
+      setIngredients(getAllIngredients())
+      setProductVariants(getAllVariantsAll())
+      setProductIngredients(getAllProductIngredientsAll())
       setUnsyncedCount(getUnsyncedCount())
       setDbReady(true)
       // Pull fresh data from Supabase on startup if online
       await pullFromSupabase()
       setCategories(getAllCategories())
       setProducts(getAllProducts())
+      setIngredients(getAllIngredients())
+      setProductVariants(getAllVariantsAll())
+      setProductIngredients(getAllProductIngredientsAll())
     }).catch(err => {
       console.error('[AppContext] DB init failed', err)
       setDbError(err.message ?? 'Veritabanı başlatılamadı')
@@ -93,6 +108,8 @@ export function AppProvider({ children }) {
       setTableDefs(getAllTableDefs())
       setCategories(getAllCategories())
       setProducts(getAllProducts())
+      setIngredients(getAllIngredients())
+      setProductVariants(getAllVariantsAll())
       setDbError(null)
     }
   }, [])
@@ -210,6 +227,52 @@ export function AppProvider({ children }) {
     }
   }, [ensureDb, refreshUnsyncedCount, syncIfOnline])
 
+  // ── ingredients actions ───────────────────────────────────────
+  const saveIngredient = useCallback(async (data) => {
+    try {
+      await ensureDb()
+      await upsertIngredient(data)
+      setIngredients(getAllIngredients())
+    } catch (err) {
+      console.error('[AppContext] saveIngredient failed', err)
+      throw err
+    }
+  }, [ensureDb])
+
+  const removeIngredient = useCallback(async (id) => {
+    try {
+      await ensureDb()
+      await deleteIngredient(id)
+      setIngredients(getAllIngredients())
+    } catch (err) {
+      console.error('[AppContext] removeIngredient failed', err)
+      throw err
+    }
+  }, [ensureDb])
+
+  // ── product variant actions ───────────────────────────────────
+  const saveVariants = useCallback(async (productId, variants) => {
+    try {
+      await ensureDb()
+      await replaceVariants(productId, variants)
+      setProductVariants(getAllVariantsAll())
+    } catch (err) {
+      console.error('[AppContext] saveVariants failed', err)
+      throw err
+    }
+  }, [ensureDb])
+
+  const saveProductIngredients = useCallback(async (productId, rows) => {
+    try {
+      await ensureDb()
+      await replaceProductIngredients(productId, rows)
+      setProductIngredients(getAllProductIngredientsAll())
+    } catch (err) {
+      console.error('[AppContext] saveProductIngredients failed', err)
+      throw err
+    }
+  }, [ensureDb])
+
   const setKdvRatePersist = useCallback((value) => {
     const clamped = Math.max(0, Math.min(100, Number(value) || 0))
     localStorage.setItem('san-lucas-kdv-rate', String(clamped))
@@ -233,6 +296,12 @@ export function AppProvider({ children }) {
       categories, addCategory, editCategory, removeCategory,
       // Products (local + cloud)
       products, saveProduct, removeProduct,
+      // Ingredients (local + cloud)
+      ingredients, saveIngredient, removeIngredient,
+      // Product variants
+      productVariants, saveVariants,
+      // Product ingredients (direct recipe)
+      productIngredients, saveProductIngredients,
       // Sync
       isSyncing, lastSyncAt, unsyncedCount, triggerSync, refreshUnsyncedCount, isOnline,
       // Reset

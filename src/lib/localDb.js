@@ -3,9 +3,12 @@
  * SQLite database via sql.js (WASM), persisted to Electron userData/san-lucas.db.
  *
  * Data ownership:
- *   table_defs  → LOCAL ONLY (never synced to Supabase)
- *   categories  → LOCAL + SUPABASE  (is_synced flag, synced via sync.js when online)
- *   products    → LOCAL + SUPABASE  (is_synced flag, synced via sync.js when online)
+ *   table_defs                → LOCAL ONLY (never synced to Supabase)
+ *   categories                → LOCAL + SUPABASE  (is_synced flag, synced via sync.js when online)
+ *   products                  → LOCAL + SUPABASE  (is_synced flag, synced via sync.js when online)
+ *   ingredients               → LOCAL + SUPABASE  (is_synced flag)
+ *   product_variants          → LOCAL + SUPABASE  (is_synced flag)
+ *   product_variant_ingredients → LOCAL ONLY (rebuilt from variants on sync)
  */
 
 import initSqlJs from 'sql.js'
@@ -83,6 +86,37 @@ const SCHEMA = `
     entity_type TEXT    NOT NULL,
     remote_id   INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ingredients (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    unit             TEXT    NOT NULL DEFAULT 'adet',
+    stock_amount     REAL    NOT NULL DEFAULT 0,
+    min_stock_alert  REAL    NOT NULL DEFAULT 0,
+    created_at       TEXT    NOT NULL,
+    is_synced        INTEGER NOT NULL DEFAULT 0,
+    remote_id        TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS product_variants (
+    id         INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL,
+    name       TEXT    NOT NULL,
+    price      REAL    NOT NULL,
+    created_at TEXT    NOT NULL,
+    is_synced  INTEGER NOT NULL DEFAULT 0,
+    remote_id  TEXT,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS product_variant_ingredients (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    variant_id    INTEGER NOT NULL,
+    ingredient_id INTEGER NOT NULL,
+    amount_used   REAL    NOT NULL,
+    FOREIGN KEY (variant_id)    REFERENCES product_variants(id) ON DELETE CASCADE,
+    FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)      ON DELETE CASCADE
+  );
 `
 
 // ── Init ──────────────────────────────────────────────────────────
@@ -90,7 +124,7 @@ export async function initDb() {
   if (db) return db
 
   const SQL = await initSqlJs({
-    locateFile: () => '/sql-wasm.wasm',
+    locateFile: () => './sql-wasm.wasm',
   })
 
   // Load existing db file from Electron userData (null on first run)
@@ -127,6 +161,19 @@ export async function initDb() {
     `ALTER TABLE orders ADD COLUMN cash_amount REAL`,
     `ALTER TABLE orders ADD COLUMN card_amount REAL`,
     `ALTER TABLE orders ADD COLUMN remote_id   TEXT`,
+    `ALTER TABLE order_items ADD COLUMN variant_id INTEGER`,
+    `ALTER TABLE ingredients ADD COLUMN container_name TEXT`,
+    `ALTER TABLE ingredients ADD COLUMN container_size REAL NOT NULL DEFAULT 0`,
+    `ALTER TABLE ingredients ADD COLUMN image_url TEXT`,
+    `ALTER TABLE orders ADD COLUMN waiter_name TEXT`,
+    `CREATE TABLE IF NOT EXISTS product_ingredients (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id    INTEGER NOT NULL,
+      ingredient_id INTEGER NOT NULL,
+      amount_used   REAL    NOT NULL,
+      FOREIGN KEY (product_id)    REFERENCES products(id)    ON DELETE CASCADE,
+      FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+    )`,
   ]
   for (const sql of migrations) {
     try { db.run(sql) } catch { /* column already exists — ignore */ }
@@ -284,6 +331,233 @@ export async function clearAllDataExceptTables() {
   await persistDb()
 }
 
+// ── ingredients (LOCAL + SUPABASE) ───────────────────────────────
+export function getAllIngredients() {
+  requireDb()
+  const res = db.exec(
+    'SELECT id, name, unit, stock_amount, min_stock_alert, created_at, is_synced, remote_id, container_name, container_size, image_url FROM ingredients ORDER BY name'
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, name, unit, stock_amount, min_stock_alert, created_at, is_synced, remote_id, container_name, container_size, image_url]) => ({
+    id, name, unit, stockAmount: stock_amount, minStockAlert: min_stock_alert,
+    createdAt: created_at, is_synced: !!is_synced, remote_id,
+    containerName: container_name || null, containerSize: container_size || 0, imageUrl: image_url || null,
+  }))
+}
+
+export async function upsertIngredient({ id, name, unit, stockAmount, minStockAlert, containerName, containerSize, imageUrl }) {
+  requireDb()
+  const now = new Date().toISOString()
+  const cn = containerName || null
+  const cs = containerSize || 0
+  const img = imageUrl || null
+  const existing = db.exec('SELECT id FROM ingredients WHERE id = ?', [id])
+  if (existing.length && existing[0].values.length) {
+    db.run(
+      'UPDATE ingredients SET name=?, unit=?, stock_amount=?, min_stock_alert=?, container_name=?, container_size=?, image_url=?, is_synced=0 WHERE id=?',
+      [name, unit, stockAmount, minStockAlert, cn, cs, img, id]
+    )
+  } else {
+    db.run(
+      'INSERT INTO ingredients (id, name, unit, stock_amount, min_stock_alert, container_name, container_size, image_url, created_at, is_synced) VALUES (?,?,?,?,?,?,?,?,?,0)',
+      [id, name, unit, stockAmount, minStockAlert, cn, cs, img, now]
+    )
+  }
+  await persistDb()
+}
+
+export async function deleteIngredient(id) {
+  requireDb()
+  const res = db.exec('SELECT remote_id FROM ingredients WHERE id = ?', [id])
+  const remoteId = res[0]?.values[0]?.[0]
+  db.run('DELETE FROM ingredients WHERE id = ?', [id])
+  if (remoteId) {
+    db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('ingredient', ?)", [remoteId])
+  }
+  await persistDb()
+}
+
+// ── product_variants + recipes (LOCAL + SUPABASE) ─────────────────
+export function getVariantsForProduct(productId) {
+  requireDb()
+  const vRes = db.exec(
+    'SELECT id, product_id, name, price FROM product_variants WHERE product_id = ? ORDER BY id',
+    [productId]
+  )
+  if (!vRes.length) return []
+  const variants = vRes[0].values.map(([id, product_id, name, price]) => ({
+    id, productId: product_id, name, price, ingredients: [],
+  }))
+  for (const v of variants) {
+    const rRes = db.exec(
+      `SELECT pvi.id, pvi.ingredient_id, i.name, i.unit, pvi.amount_used
+       FROM product_variant_ingredients pvi
+       JOIN ingredients i ON i.id = pvi.ingredient_id
+       WHERE pvi.variant_id = ?`,
+      [v.id]
+    )
+    if (rRes.length && rRes[0].values.length) {
+      v.ingredients = rRes[0].values.map(([id, ingredientId, ingName, unit, amountUsed]) => ({
+        id, ingredientId, name: ingName, unit, amountUsed,
+      }))
+    }
+  }
+  return variants
+}
+
+export function getAllVariantsAll() {
+  requireDb()
+  const vRes = db.exec('SELECT id, product_id, name, price FROM product_variants ORDER BY product_id, id')
+  if (!vRes.length) return {}
+  const map = {}
+  const variantObjs = vRes[0].values.map(([id, product_id, name, price]) => {
+    if (!map[product_id]) map[product_id] = []
+    const v = { id, productId: product_id, name, price, ingredients: [] }
+    map[product_id].push(v)
+    return v
+  })
+  const rRes = db.exec(
+    `SELECT pvi.variant_id, pvi.ingredient_id, i.name, i.unit, pvi.amount_used
+     FROM product_variant_ingredients pvi
+     JOIN ingredients i ON i.id = pvi.ingredient_id`
+  )
+  if (rRes.length && rRes[0].values.length) {
+    const byVariant = {}
+    variantObjs.forEach(v => { byVariant[v.id] = v })
+    for (const [variant_id, ingredientId, ingName, unit, amountUsed] of rRes[0].values) {
+      if (byVariant[variant_id]) {
+        byVariant[variant_id].ingredients.push({ ingredientId, name: ingName, unit, amountUsed })
+      }
+    }
+  }
+  return map
+}
+
+export async function replaceVariants(productId, variants) {
+  requireDb()
+  // Delete existing variants (cascades to product_variant_ingredients)
+  db.run('DELETE FROM product_variants WHERE product_id = ?', [productId])
+  const now = new Date().toISOString()
+  for (const v of variants) {
+    const vid = v.id && !String(v.id).startsWith('new_') ? v.id : Date.now() + Math.floor(Math.random() * 10000)
+    db.run(
+      'INSERT INTO product_variants (id, product_id, name, price, created_at, is_synced) VALUES (?,?,?,?,?,0)',
+      [vid, productId, v.name, parseFloat(v.price) || 0, now]
+    )
+    for (const ing of (v.ingredients ?? [])) {
+      if (!ing.ingredientId) continue
+      db.run(
+        'INSERT INTO product_variant_ingredients (variant_id, ingredient_id, amount_used) VALUES (?,?,?)',
+        [vid, ing.ingredientId, parseFloat(ing.amountUsed) || 0]
+      )
+    }
+  }
+  await persistDb()
+}
+
+export function consumeIngredients(items) {
+  requireDb()
+  const lowStock = []
+  const warned = new Set()
+
+  const checkLowStock = (ingredient_id) => {
+    if (warned.has(ingredient_id)) return
+    const sRes = db.exec(
+      'SELECT name, stock_amount, min_stock_alert FROM ingredients WHERE id = ?',
+      [ingredient_id]
+    )
+    if (sRes.length && sRes[0].values.length) {
+      const [name, stock_amount, min_stock_alert] = sRes[0].values[0]
+      if (min_stock_alert > 0 && stock_amount <= min_stock_alert) {
+        lowStock.push({ id: ingredient_id, name, stockAmount: stock_amount, minStockAlert: min_stock_alert })
+        warned.add(ingredient_id)
+      }
+    }
+  }
+
+  for (const item of items) {
+    if (!item.variantId) continue
+    const rRes = db.exec(
+      'SELECT ingredient_id, amount_used FROM product_variant_ingredients WHERE variant_id = ?',
+      [item.variantId]
+    )
+    if (!rRes.length) continue
+    for (const [ingredient_id, amount_used] of rRes[0].values) {
+      db.run(
+        'UPDATE ingredients SET stock_amount = MAX(0, stock_amount - ?), is_synced = 0 WHERE id = ?',
+        [amount_used * (item.qty ?? 1), ingredient_id]
+      )
+      checkLowStock(ingredient_id)
+    }
+  }
+
+  // Direct product→ingredient recipe (no variant)
+  for (const item of items) {
+    if (item.variantId) continue
+    if (!item.productId) continue
+    const rRes = db.exec(
+      'SELECT ingredient_id, amount_used FROM product_ingredients WHERE product_id = ?',
+      [item.productId]
+    )
+    if (!rRes.length) continue
+    for (const [ingredient_id, amount_used] of rRes[0].values) {
+      db.run(
+        'UPDATE ingredients SET stock_amount = MAX(0, stock_amount - ?), is_synced = 0 WHERE id = ?',
+        [amount_used * (item.qty ?? 1), ingredient_id]
+      )
+      checkLowStock(ingredient_id)
+    }
+  }
+
+  return lowStock
+}
+
+// ── product_ingredients (direct recipe, no variant) ───────────────
+export function getIngredientsForProduct(productId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT pi.id, pi.ingredient_id, i.name, i.unit, pi.amount_used
+     FROM product_ingredients pi
+     JOIN ingredients i ON i.id = pi.ingredient_id
+     WHERE pi.product_id = ? ORDER BY pi.id`,
+    [productId]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, ingredient_id, name, unit, amount_used]) => ({
+    id, ingredientId: ingredient_id, name, unit, amountUsed: amount_used,
+  }))
+}
+
+export async function replaceProductIngredients(productId, rows) {
+  requireDb()
+  db.run('DELETE FROM product_ingredients WHERE product_id = ?', [productId])
+  for (const row of rows) {
+    if (!row.ingredientId || !row.amountUsed) continue
+    db.run(
+      'INSERT INTO product_ingredients (product_id, ingredient_id, amount_used) VALUES (?,?,?)',
+      [productId, Number(row.ingredientId), parseFloat(row.amountUsed)]
+    )
+  }
+  await persistDb()
+}
+
+export function getAllProductIngredientsAll() {
+  requireDb()
+  const res = db.exec(
+    `SELECT pi.product_id, pi.ingredient_id, i.name, i.unit, pi.amount_used
+     FROM product_ingredients pi
+     JOIN ingredients i ON i.id = pi.ingredient_id
+     ORDER BY pi.product_id, pi.id`
+  )
+  if (!res.length) return {}
+  const map = {}
+  for (const [product_id, ingredient_id, name, unit, amount_used] of res[0].values) {
+    if (!map[product_id]) map[product_id] = []
+    map[product_id].push({ ingredientId: ingredient_id, name, unit, amountUsed: amount_used })
+  }
+  return map
+}
+
 // ── orders / order_items ──────────────────────────────────────────
 
 export async function saveCompletedOrder(txData) {
@@ -306,8 +580,8 @@ export async function saveCompletedOrder(txData) {
   db.run(
     `INSERT INTO orders
        (id, local_id, table_id, table_name, status, payment_method,
-        subtotal, tax, discount, total, cash_amount, card_amount, is_synced, remote_id, created_at, closed_at)
-     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        subtotal, tax, discount, total, cash_amount, card_amount, is_synced, remote_id, created_at, closed_at, waiter_name)
+     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId,
       localId,
@@ -324,19 +598,30 @@ export async function saveCompletedOrder(txData) {
       remoteId,
       now,
       closedAt,
+      txData.waiterName ?? null,
     ]
   )
 
   for (const item of (txData.items ?? [])) {
     db.run(
       `INSERT INTO order_items
-         (local_id, order_id, product_id, name, quantity, unit_price, is_synced)
-       VALUES (?, ?, ?, ?, ?, ?, 0)`,
-      [crypto.randomUUID(), orderId, item.id ?? null, item.name, item.qty, item.unitPrice]
+         (local_id, order_id, product_id, variant_id, name, quantity, unit_price, is_synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+      [
+        crypto.randomUUID(),
+        orderId,
+        item.productId ?? item.id ?? null,
+        item.variantId ?? null,
+        item.name,
+        item.qty,
+        item.unitPrice,
+      ]
     )
   }
 
+  const lowStockWarnings = consumeIngredients(txData.items ?? [])
   await persistDb()
+  return { lowStockWarnings }
 }
 
 export function getDailyRevenue() {
@@ -417,7 +702,7 @@ export async function markProductSynced(id, remoteId) {
 
 export function getUnsyncedOrders() {
   const res = db.exec(
-    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at
+    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name
      FROM orders WHERE is_synced = 0`
   )
   return res.length ? res[0].values : []
@@ -657,4 +942,38 @@ export function getProductSalesDetail(startIso, endIso) {
     name, category, qty, revenue,
     dailyAvg: days > 0 ? revenue / days : 0,
   }))
+}
+
+// ── Staff performance queries ─────────────────────────────────────
+
+export function getStaffPerformance(startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT waiter_name, COUNT(*) as order_count, COALESCE(SUM(total), 0) as revenue
+     FROM orders
+     WHERE status = 'completed'
+       AND waiter_name IS NOT NULL AND waiter_name != '' ${clause}
+     GROUP BY waiter_name
+     ORDER BY revenue DESC`,
+    params
+  )
+  if (!res.length) return []
+  return res[0].values.map(([name, orderCount, revenue]) => ({ name, orderCount, revenue }))
+}
+
+export function getStaffItemBreakdown(staffName, startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT oi.name, SUM(oi.quantity) as qty, SUM(oi.quantity * oi.unit_price) as revenue
+     FROM order_items oi
+     JOIN orders o ON oi.order_id = o.id
+     WHERE o.status = 'completed' AND o.waiter_name = ? ${clause}
+     GROUP BY oi.name
+     ORDER BY revenue DESC`,
+    [staffName, ...params]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([name, qty, revenue]) => ({ name, qty, revenue }))
 }

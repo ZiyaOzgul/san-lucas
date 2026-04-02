@@ -13,6 +13,7 @@ import {
   getUnsyncedOrders,     markOrderSynced,
   getUnsyncedOrderItems, markOrderItemSynced,
   upsertCategoryFromRemote, upsertProductFromRemote,
+  getAllIngredients, upsertIngredient,
   getPendingDeletes, clearPendingDelete,
   persistDb,
 } from './localDb.js'
@@ -23,7 +24,7 @@ export async function syncToSupabase() {
     return { categories: 0, products: 0, orders: 0, orderItems: 0 }
   }
 
-  let synced = { categories: 0, products: 0, orders: 0, orderItems: 0 }
+  let synced = { categories: 0, products: 0, ingredients: 0, orders: 0, orderItems: 0 }
 
   // ── Pending deletes ────────────────────────────────────────────
   const pendingDeletes = getPendingDeletes()
@@ -53,6 +54,27 @@ export async function syncToSupabase() {
       console.log(`[Sync] ✓ Category synced: "${name}" (local:${id} → remote:${data.id})`)
     } else if (error) {
       console.error('[Sync] ✗ Category upsert failed', error)
+    }
+  }
+
+  // ── Ingredients ────────────────────────────────────────────────
+  const allIngredients = getAllIngredients()
+  const unsyncedIngredients = allIngredients.filter(i => !i.is_synced)
+  for (const ing of unsyncedIngredients) {
+    const { data, error } = await supabase
+      .from('ingredients')
+      .upsert(
+        { local_id: String(ing.id), name: ing.name, unit: ing.unit, stock_amount: ing.stockAmount, min_stock_alert: ing.minStockAlert },
+        { onConflict: 'local_id' }
+      )
+      .select('id')
+      .single()
+
+    if (!error && data) {
+      synced.ingredients++
+      console.log(`[Sync] ✓ Ingredient synced: "${ing.name}" (local:${ing.id} → remote:${data.id})`)
+    } else if (error) {
+      console.error('[Sync] ✗ Ingredient upsert failed', error)
     }
   }
 
@@ -95,11 +117,11 @@ export async function syncToSupabase() {
 
   // ── Orders ─────────────────────────────────────────────────────
   const orders = getUnsyncedOrders()
-  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at] of orders) {
+  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name] of orders) {
     const { data, error } = await supabase
       .from('orders')
       .upsert(
-        { local_id, table_id, status, payment_method, total, created_at, closed_at },
+        { local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name: waiter_name ?? null },
         { onConflict: 'local_id' }
       )
       .select('id')
@@ -138,9 +160,9 @@ export async function syncToSupabase() {
   }
   if (itemDirty) await persistDb()
 
-  const anyWork = synced.categories + synced.products + synced.orders + synced.orderItems
+  const anyWork = synced.categories + synced.products + synced.ingredients + synced.orders + synced.orderItems
   if (anyWork > 0) {
-    console.log(`[Sync] ── Sync complete ── cats:${synced.categories} prods:${synced.products} orders:${synced.orders} items:${synced.orderItems}`)
+    console.log(`[Sync] ── Sync complete ── cats:${synced.categories} prods:${synced.products} ings:${synced.ingredients} orders:${synced.orders} items:${synced.orderItems}`)
   }
   return synced
 }
@@ -170,6 +192,27 @@ export async function pullFromSupabase() {
     }
     await persistDb()
     console.log(`[Sync] ↓ Pulled ${cats.length} categories from Supabase`)
+  }
+
+  // ── Pull ingredients ───────────────────────────────────────────
+  const { data: ings, error: ingErr } = await supabase
+    .from('ingredients')
+    .select('id, name, unit, stock_amount, min_stock_alert')
+
+  if (ingErr) {
+    console.error('[Sync] ✗ Failed to pull ingredients', ingErr)
+  } else if (ings) {
+    for (const ing of ings) {
+      await upsertIngredient({
+        id:            ing.id,
+        name:          ing.name,
+        unit:          ing.unit,
+        stockAmount:   ing.stock_amount,
+        minStockAlert: ing.min_stock_alert,
+      })
+    }
+    await persistDb()
+    console.log(`[Sync] ↓ Pulled ${ings.length} ingredients from Supabase`)
   }
 
   // ── Pull products ──────────────────────────────────────────────

@@ -31,7 +31,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "public/san-lucas-logo.png"
+      "icon": "public/appIcon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -51,6 +51,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "vite": "^8.0.1",
+    "vite-plugin-static-copy": "^4.0.0",
     "wait-on": "^7.2.0"
   }
 }

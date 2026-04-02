@@ -3,7 +3,9 @@
     "allow": [
       "Bash(cd:*)",
       "Bash(find:*)",
-      "Bash(file:*)"
+      "Bash(file:*)",
+      "Bash(npx:*)",
+      "Bash(ls:*)"
     ]
   }
 }

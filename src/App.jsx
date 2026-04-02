@@ -7,7 +7,9 @@ import useOnlineStatus from './hooks/useOnlineStatus.js'
 import Tables from './pages/Tables/Tables.jsx'
 import Orders from './pages/Orders/Orders.jsx'
 import Products from './pages/Products/Products.jsx'
+import Ingredients from './pages/Ingredients/Ingredients.jsx'
 import Reports from './pages/Reports/Reports.jsx'
+import Staff from './pages/Staff/Staff.jsx'
 import Settings from './pages/Settings/Settings.jsx'
 
 function AppShell() {
@@ -48,8 +50,10 @@ function AppShell() {
         <Routes>
           <Route path="/"         element={<Tables />} />
           <Route path="/orders"   element={<Orders />} />
-          <Route path="/products" element={<Products />} />
-          <Route path="/reports"  element={<Reports />} />
+          <Route path="/products"    element={<Products />} />
+          <Route path="/ingredients" element={<Ingredients />} />
+          <Route path="/reports"     element={<Reports />} />
+          <Route path="/staff"       element={<Staff />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>
