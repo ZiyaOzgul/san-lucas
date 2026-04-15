@@ -91,6 +91,7 @@ function ProductModal({ product, categories, ingredients, existingVariants, exis
         id:         product?.id ?? Date.now(),
         name:       name.trim(),
         price:      parseFloat(price),
+        stock:      product?.stock ?? 0,
         categoryId: Number(categoryId),
         imageUrl:   imageUrl || null,
         recipe:     recipe.trim() || null,

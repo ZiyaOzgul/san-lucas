@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import './styles/layout.css'
 import { AppProvider, useApp } from './context/AppContext.jsx'
@@ -11,6 +11,7 @@ import Ingredients from './pages/Ingredients/Ingredients.jsx'
 import Reports from './pages/Reports/Reports.jsx'
 import Staff from './pages/Staff/Staff.jsx'
 import Settings from './pages/Settings/Settings.jsx'
+import Login from './pages/Login/Login.jsx'
 
 function AppShell() {
   const { dbReady, dbError, triggerSync } = useApp()
@@ -62,9 +63,15 @@ function AppShell() {
 }
 
 function App() {
+  const [user, setUser] = useState(null)
+
   return (
     <AppProvider>
-      <AppShell />
+      {user ? (
+        <AppShell />
+      ) : (
+        <Login onLogin={setUser} />
+      )}
     </AppProvider>
   )
 }

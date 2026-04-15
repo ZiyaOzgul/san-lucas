@@ -10,7 +10,7 @@ import {
   getUnsyncedCount, clearAllDataExceptTables,
 } from '../lib/localDb.js'
 import { syncToSupabase, pullFromSupabase } from '../lib/sync.js'
-import { deleteProductImage } from '../lib/supabase.js'
+import { deleteProductImage, resetSupabaseData } from '../lib/supabase.js'
 
 const AppContext = createContext(null)
 
@@ -27,6 +27,7 @@ export function AppProvider({ children }) {
   const [isSyncing,     setIsSyncing]     = useState(false)
   const [lastSyncAt,    setLastSyncAt]    = useState(null)
   const [unsyncedCount, setUnsyncedCount] = useState(0)
+  const [syncLogs,      setSyncLogs]      = useState([])
   const [isOnline,      setIsOnline]      = useState(navigator.onLine)
   const [kdvRate,       setKdvRate]       = useState(() => {
     const stored = localStorage.getItem('san-lucas-kdv-rate')
@@ -60,13 +61,19 @@ export function AppProvider({ children }) {
   const triggerSync = useCallback(async () => {
     if (isSyncing) return
     setIsSyncing(true)
+    setSyncLogs([])
+    const addLog = (type, text) =>
+      setSyncLogs(prev => [...prev, { id: Date.now() + Math.random(), time: new Date(), type, text }])
+    addLog('info', 'Senkronizasyon başlatıldı…')
     try {
-      await syncToSupabase()
-      await pullFromSupabase()
+      await syncToSupabase(addLog)
+      await pullFromSupabase(addLog)
       refreshLocalData()
       setLastSyncAt(new Date())
+      addLog('info', 'Senkronizasyon tamamlandı.')
     } catch (e) {
       console.error('[AppContext] sync error', e)
+      addLog('error', 'Senkronizasyon hatası: ' + (e.message ?? String(e)))
     } finally {
       setIsSyncing(false)
     }
@@ -87,7 +94,8 @@ export function AppProvider({ children }) {
       setProductIngredients(getAllProductIngredientsAll())
       setUnsyncedCount(getUnsyncedCount())
       setDbReady(true)
-      // Pull fresh data from Supabase on startup if online
+      // Push pending deletes first, then pull fresh data from Supabase on startup if online
+      await syncToSupabase()
       await pullFromSupabase()
       setCategories(getAllCategories())
       setProducts(getAllProducts())
@@ -233,22 +241,26 @@ export function AppProvider({ children }) {
       await ensureDb()
       await upsertIngredient(data)
       setIngredients(getAllIngredients())
+      refreshUnsyncedCount()
+      syncIfOnline()
     } catch (err) {
       console.error('[AppContext] saveIngredient failed', err)
       throw err
     }
-  }, [ensureDb])
+  }, [ensureDb, refreshUnsyncedCount, syncIfOnline])
 
   const removeIngredient = useCallback(async (id) => {
     try {
       await ensureDb()
       await deleteIngredient(id)
       setIngredients(getAllIngredients())
+      refreshUnsyncedCount()
+      syncIfOnline()
     } catch (err) {
       console.error('[AppContext] removeIngredient failed', err)
       throw err
     }
-  }, [ensureDb])
+  }, [ensureDb, refreshUnsyncedCount, syncIfOnline])
 
   // ── product variant actions ───────────────────────────────────
   const saveVariants = useCallback(async (productId, variants) => {
@@ -287,6 +299,16 @@ export function AppProvider({ children }) {
     setUnsyncedCount(0)
   }, [ensureDb])
 
+  const resetOnlineData = useCallback(async () => {
+    await resetSupabaseData()
+    await ensureDb()
+    await clearAllDataExceptTables()
+    setCategories([])
+    setProducts([])
+    setIngredients([])
+    setUnsyncedCount(0)
+  }, [ensureDb])
+
   return (
     <AppContext.Provider value={{
       dbReady, dbError,
@@ -305,7 +327,9 @@ export function AppProvider({ children }) {
       // Sync
       isSyncing, lastSyncAt, unsyncedCount, triggerSync, refreshUnsyncedCount, isOnline,
       // Reset
-      resetAllData,
+      resetAllData, resetOnlineData,
+      // Sync logs
+      syncLogs,
       // KDV
       kdvRate, setKdvRatePersist,
     }}>

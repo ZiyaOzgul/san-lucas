@@ -23,6 +23,9 @@
   "build": {
     "appId": "com.sanlucas.cafe",
     "productName": "San Lucas Cafe",
+    "directories": {
+      "output": "san-lucas-app-install"
+    },
     "files": [
       "dist/**/*",
       "electron/**/*",
@@ -31,7 +34,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "public/appIcon.ico"
+      "icon": "public/icon.ico"
     },
     "nsis": {
       "oneClick": false,

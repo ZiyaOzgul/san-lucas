@@ -117,6 +117,22 @@ const SCHEMA = `
     FOREIGN KEY (variant_id)    REFERENCES product_variants(id) ON DELETE CASCADE,
     FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)      ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS staff (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    role        TEXT    NOT NULL DEFAULT 'Garson',
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    permissions TEXT    NOT NULL DEFAULT '{}',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    email    TEXT    NOT NULL UNIQUE,
+    password TEXT    NOT NULL,
+    role     TEXT    NOT NULL DEFAULT 'admin'
+  );
 `
 
 // ── Init ──────────────────────────────────────────────────────────
@@ -166,6 +182,9 @@ export async function initDb() {
     `ALTER TABLE ingredients ADD COLUMN container_size REAL NOT NULL DEFAULT 0`,
     `ALTER TABLE ingredients ADD COLUMN image_url TEXT`,
     `ALTER TABLE orders ADD COLUMN waiter_name TEXT`,
+    `ALTER TABLE staff ADD COLUMN contact TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE staff ADD COLUMN email TEXT`,
+    `ALTER TABLE staff ADD COLUMN supabase_uid TEXT`,
     `CREATE TABLE IF NOT EXISTS product_ingredients (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id    INTEGER NOT NULL,
@@ -185,6 +204,14 @@ export async function initDb() {
     for (const t of SEED_TABLE_DEFS) {
       db.run('INSERT INTO table_defs (id, name) VALUES (?, ?)', [t.id, t.name])
     }
+    await persistDb()
+  }
+
+  // Seed default admin user if no users exist
+  const noUsers = db.exec('SELECT COUNT(*) FROM users')[0]?.values[0][0] === 0
+  if (noUsers) {
+    db.run(`INSERT INTO users (email, password, role) VALUES (?, ?, 'admin')`,
+      ['sanlucascafe@gmail.com', '123456789'])
     await persistDb()
   }
 
@@ -266,6 +293,12 @@ export async function updateCategory(id, fields) {
     [name, color, icon, id]
   )
   await persistDb()
+}
+
+export function getCategoryRemoteId(localId) {
+  requireDb()
+  const res = db.exec('SELECT remote_id FROM categories WHERE id = ?', [localId])
+  return res[0]?.values[0]?.[0] ?? null
 }
 
 export async function deleteCategory(id) {
@@ -655,6 +688,26 @@ export async function upsertCategoryFromRemote({ remoteId, name, color, icon }) 
   }
 }
 
+export async function upsertIngredientFromRemote({ remoteId, name, unit, stockAmount, minStockAlert }) {
+  requireDb()
+  const existing = db.exec('SELECT id FROM ingredients WHERE remote_id = ?', [String(remoteId)])
+  if (existing.length && existing[0].values.length) {
+    // Update fields — preserve local image and container data
+    const localId = existing[0].values[0][0]
+    db.run(
+      'UPDATE ingredients SET name=?, unit=?, stock_amount=?, min_stock_alert=?, is_synced=1 WHERE id=?',
+      [name, unit, stockAmount, minStockAlert, localId]
+    )
+  } else {
+    const localId = Date.now() + (Math.random() * 1000 | 0)
+    const now = new Date().toISOString()
+    db.run(
+      'INSERT OR IGNORE INTO ingredients (id, name, unit, stock_amount, min_stock_alert, created_at, is_synced, remote_id) VALUES (?,?,?,?,?,?,1,?)',
+      [localId, name, unit, stockAmount, minStockAlert, now, String(remoteId)]
+    )
+  }
+}
+
 export async function upsertProductFromRemote({ remoteId, name, price, stock, remoteCatId, imageUrl }) {
   requireDb()
   // Resolve local category id from its remote_id
@@ -700,6 +753,27 @@ export async function markProductSynced(id, remoteId) {
   await persistDb()
 }
 
+export async function markIngredientSynced(id, remoteId) {
+  db.run('UPDATE ingredients SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  await persistDb()
+}
+
+export function getUnsyncedVariants() {
+  requireDb()
+  const res = db.exec(
+    `SELECT pv.id, pv.remote_id, p.remote_id as product_remote_id, pv.name, pv.price
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.is_synced = 0 AND p.remote_id IS NOT NULL`
+  )
+  return res.length ? res[0].values : []
+}
+
+export async function markVariantSynced(id, remoteId) {
+  db.run('UPDATE product_variants SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  await persistDb()
+}
+
 export function getUnsyncedOrders() {
   const res = db.exec(
     `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name
@@ -711,9 +785,12 @@ export function getUnsyncedOrders() {
 export function getUnsyncedOrderItems() {
   const res = db.exec(
     `SELECT oi.id, oi.local_id, o.remote_id as order_remote_id,
-            oi.quantity, oi.unit_price
+            oi.quantity, oi.unit_price, p.remote_id as product_remote_id,
+            pv.remote_id as variant_remote_id
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
+     LEFT JOIN products p ON p.id = oi.product_id
+     LEFT JOIN product_variants pv ON pv.id = oi.variant_id
      WHERE oi.is_synced = 0`
   )
   return res.length ? res[0].values : []
@@ -738,6 +815,17 @@ export function getPendingDeletes() {
 export async function clearPendingDelete(id) {
   db.run('DELETE FROM pending_deletes WHERE id = ?', [id])
   await persistDb()
+}
+
+export function checkLogin(email, password) {
+  requireDb()
+  const res = db.exec(
+    'SELECT id, email, role FROM users WHERE email = ? AND password = ? LIMIT 1',
+    [email.trim().toLowerCase(), password]
+  )
+  if (!res.length || !res[0].values.length) return null
+  const [id, em, role] = res[0].values[0]
+  return { id, email: em, role }
 }
 
 export function getUnsyncedCount() {
@@ -944,6 +1032,34 @@ export function getProductSalesDetail(startIso, endIso) {
   }))
 }
 
+export function getTableProductBreakdown(tableName, startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT oi.name, SUM(oi.quantity) as qty, SUM(oi.quantity * oi.unit_price) as revenue
+     FROM order_items oi JOIN orders o ON oi.order_id = o.id
+     WHERE o.status='completed' AND o.table_name=? ${clause}
+     GROUP BY oi.name ORDER BY revenue DESC`,
+    [tableName, ...params]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([name, qty, revenue]) => ({ name, qty, revenue }))
+}
+
+export function getProductTableBreakdown(productName, startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT o.table_name, SUM(oi.quantity) as qty, SUM(oi.quantity * oi.unit_price) as revenue
+     FROM order_items oi JOIN orders o ON oi.order_id = o.id
+     WHERE o.status='completed' AND oi.name=? ${clause}
+     GROUP BY o.table_name ORDER BY revenue DESC`,
+    [productName, ...params]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([table, qty, revenue]) => ({ table, qty, revenue }))
+}
+
 // ── Staff performance queries ─────────────────────────────────────
 
 export function getStaffPerformance(startIso, endIso) {
@@ -976,4 +1092,178 @@ export function getStaffItemBreakdown(staffName, startIso, endIso) {
   )
   if (!res.length) return []
   return res[0].values.map(([name, qty, revenue]) => ({ name, qty, revenue }))
+}
+
+export function getStaffHourlySales(staffName, startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT CAST(strftime('%H', closed_at) AS INTEGER) as hour,
+            COUNT(*) as orders,
+            COALESCE(SUM(total), 0) as revenue
+     FROM orders
+     WHERE status = 'completed' AND waiter_name = ? ${clause}
+     GROUP BY hour
+     ORDER BY hour`,
+    [staffName, ...params]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([hour, orders, revenue]) => ({ hour, orders, revenue }))
+}
+
+// ── Category revenue ──────────────────────────────────────────────
+
+export function getCategoryRevenue(startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT COALESCE(c.name, 'Kategorisiz') as category,
+            SUM(oi.quantity) as qty,
+            SUM(oi.quantity * oi.unit_price) as revenue
+     FROM order_items oi
+     JOIN orders o ON oi.order_id = o.id
+     LEFT JOIN products p ON p.id = oi.product_id
+     LEFT JOIN categories c ON c.id = p.category_id
+     WHERE o.status = 'completed' ${clause}
+     GROUP BY c.name
+     ORDER BY revenue DESC`,
+    params
+  )
+  if (!res.length || !res[0].values.length) return []
+  const rows = res[0].values.map(([category, qty, revenue]) => ({ category, qty, revenue }))
+  const total = rows.reduce((s, r) => s + r.revenue, 0) || 1
+  return rows.map(r => ({ ...r, pct: Math.round((r.revenue / total) * 100) }))
+}
+
+// ── Ingredient consumption ────────────────────────────────────────
+
+export function getIngredientConsumption(startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const consumed = {}
+
+  // Direct product recipe consumption
+  const directRes = db.exec(
+    `SELECT pi.ingredient_id, SUM(pi.amount_used * oi.quantity)
+     FROM order_items oi
+     JOIN orders o ON oi.order_id = o.id
+     JOIN product_ingredients pi ON pi.product_id = oi.product_id
+     WHERE o.status = 'completed' AND oi.variant_id IS NULL ${clause}
+     GROUP BY pi.ingredient_id`,
+    params
+  )
+  if (directRes.length) directRes[0].values.forEach(([id, c]) => { consumed[id] = (consumed[id] || 0) + c })
+
+  // Variant recipe consumption
+  const variantRes = db.exec(
+    `SELECT pvi.ingredient_id, SUM(pvi.amount_used * oi.quantity)
+     FROM order_items oi
+     JOIN orders o ON oi.order_id = o.id
+     JOIN product_variant_ingredients pvi ON pvi.variant_id = oi.variant_id
+     WHERE o.status = 'completed' AND oi.variant_id IS NOT NULL ${clause}
+     GROUP BY pvi.ingredient_id`,
+    params
+  )
+  if (variantRes.length) variantRes[0].values.forEach(([id, c]) => { consumed[id] = (consumed[id] || 0) + c })
+
+  const ingRes = db.exec('SELECT id, name, unit, stock_amount, min_stock_alert FROM ingredients ORDER BY name')
+  if (!ingRes.length) return []
+  return ingRes[0].values.map(([id, name, unit, stock_amount, min_stock_alert]) => ({
+    id, name, unit,
+    currentStock: stock_amount,
+    minStockAlert: min_stock_alert,
+    consumed: consumed[id] || 0,
+  }))
+}
+
+// ── Order history ─────────────────────────────────────────────────
+
+export function getOrdersList(startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT o.id, o.closed_at, o.table_name, o.payment_method, o.total, o.waiter_name,
+            GROUP_CONCAT(oi.name || ' ×' || oi.quantity, ', ') as items_summary
+     FROM orders o
+     LEFT JOIN order_items oi ON oi.order_id = o.id
+     WHERE o.status = 'completed' ${clause}
+     GROUP BY o.id
+     ORDER BY o.closed_at DESC`,
+    params
+  )
+  if (!res.length || !res[0].values.length) return []
+  return res[0].values.map(([id, closedAt, tableName, paymentMethod, total, waiterName, itemsSummary]) => ({
+    id, closedAt, tableName, paymentMethod, total, waiterName: waiterName || null, itemsSummary: itemsSummary || '',
+  }))
+}
+
+export function getOrderItems(orderId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT name, quantity, unit_price FROM order_items WHERE order_id = ? ORDER BY id`,
+    [orderId]
+  )
+  if (!res.length || !res[0].values.length) return []
+  return res[0].values.map(([name, quantity, unitPrice]) => ({ name, quantity, unitPrice }))
+}
+
+// ── staff CRUD (LOCAL ONLY) ───────────────────────────────────────
+
+const DEFAULT_PERMISSIONS = {
+  tables: true,
+  orders: true,
+  products_view: true,
+  products_edit: false,
+  reports: false,
+  settings: false,
+  apply_discount: false,
+  cancel_order: false,
+  close_table: true,
+}
+
+export function getAllStaff() {
+  requireDb()
+  const res = db.exec('SELECT id, name, role, is_active, permissions, created_at, contact, email, supabase_uid FROM staff ORDER BY name')
+  if (!res.length) return []
+  return res[0].values.map(([id, name, role, is_active, permissions, created_at, contact, email, supabase_uid]) => ({
+    id,
+    name,
+    role,
+    contact: contact || '',
+    email: email || '',
+    supabaseUid: supabase_uid || null,
+    isActive: !!is_active,
+    permissions: (() => { try { return { ...DEFAULT_PERMISSIONS, ...JSON.parse(permissions || '{}') } } catch { return { ...DEFAULT_PERMISSIONS } } })(),
+    createdAt: created_at,
+  }))
+}
+
+export async function insertStaff({ name, role = 'Garson', contact = '', email = '', supabaseUid = null, permissions = {} }) {
+  requireDb()
+  const perms = JSON.stringify({ ...DEFAULT_PERMISSIONS, ...permissions })
+  const now   = new Date().toISOString()
+  db.run(
+    'INSERT INTO staff (name, role, contact, is_active, permissions, created_at, email, supabase_uid) VALUES (?, ?, ?, 1, ?, ?, ?, ?)',
+    [name.trim(), role.trim(), contact.trim(), perms, now, email.trim(), supabaseUid]
+  )
+  await persistDb()
+  const res = db.exec('SELECT last_insert_rowid()')
+  const id  = res[0].values[0][0]
+  return { id, name: name.trim(), role: role.trim(), contact: contact.trim(), email: email.trim(), supabaseUid, isActive: true, permissions: { ...DEFAULT_PERMISSIONS, ...permissions }, createdAt: now }
+}
+
+export async function updateStaff({ id, name, role, contact = '', isActive, permissions }) {
+  requireDb()
+  const perms = JSON.stringify({ ...DEFAULT_PERMISSIONS, ...permissions })
+  db.run(
+    'UPDATE staff SET name = ?, role = ?, contact = ?, is_active = ?, permissions = ? WHERE id = ?',
+    [name.trim(), role.trim(), contact.trim(), isActive ? 1 : 0, perms, id]
+  )
+  await persistDb()
+}
+
+export async function deleteStaff(id) {
+  requireDb()
+  db.run('DELETE FROM staff WHERE id = ?', [id])
+  await persistDb()
 }

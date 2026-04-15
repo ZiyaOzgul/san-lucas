@@ -670,3 +670,172 @@
 }
 
 .settings-footer__save:hover { background-color: var(--color-accent-hover); }
+
+/* ── Reset Data Modal ─────────────────────────────────────────────── */
+.st-reset-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.st-reset-modal {
+  background: var(--color-bg-card);
+  border-radius: var(--radius-card);
+  padding: 28px 28px 24px;
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  box-shadow: var(--color-shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.st-reset-modal__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.st-reset-modal__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.st-reset-modal__sub {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.st-reset-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.st-reset-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--radius-card);
+  border: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.st-reset-option--local {
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+}
+.st-reset-option--local:hover { border-color: var(--color-accent); }
+
+.st-reset-option--online {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+.st-reset-option--online:hover { border-color: var(--color-danger); }
+
+.st-reset-option__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.st-reset-option__desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.st-reset-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--color-warning-light);
+  border-radius: var(--radius-input);
+  color: var(--color-warning);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.st-reset-warning--online {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.st-reset-warning p { margin: 0; color: var(--color-text-primary); }
+.st-reset-warning svg { flex-shrink: 0; margin-top: 2px; }
+
+.st-reset-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.st-reset-cancel {
+  padding: 9px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-page);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.st-reset-cancel:hover { background: var(--color-border); }
+.st-reset-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.st-reset-confirm-btn {
+  padding: 9px 20px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: var(--color-warning);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.st-reset-confirm-btn:hover { opacity: 0.88; }
+.st-reset-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.st-reset-confirm-btn--online { background: var(--color-danger); }
+
+/* ── Sync Log Panel ───────────────────────────────────────────────── */
+.st-sync-log {
+  margin-top: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: #f9f9f7;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+
+.st-sync-log-entry {
+  display: flex;
+  gap: 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--color-border);
+  align-items: flex-start;
+}
+.st-sync-log-entry:last-child { border-bottom: none; }
+
+.st-sync-log-time {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.st-sync-log-text { color: var(--color-text-secondary); }
+.st-sync-log-entry--success .st-sync-log-text { color: var(--color-success); }
+.st-sync-log-entry--error   .st-sync-log-text { color: var(--color-danger); }

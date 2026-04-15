@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
-import { supabase, isSupabaseReady } from '../../lib/supabase.js'
+import { getAllStaff } from '../../lib/localDb.js'
 import './PaymentModal.css'
 
 const PAYMENT_METHODS = [
@@ -48,10 +48,8 @@ function PaymentModal({ table, onClose, onComplete }) {
   const [selectedWaiter, setSelectedWaiter] = useState('')
 
   useEffect(() => {
-    if (!isSupabaseReady) return
-    supabase.from('profiles').select('id, full_name').order('full_name').then(({ data }) => {
-      if (data) setStaffList(data.filter(p => p.full_name))
-    })
+    const list = getAllStaff().filter(s => s.isActive)
+    setStaffList(list)
   }, [])
 
   const taxDecimal = kdvRate / 100
@@ -201,7 +199,7 @@ function PaymentModal({ table, onClose, onComplete }) {
                 >
                   <option value="">Seçin...</option>
                   {staffList.map(s => (
-                    <option key={s.id} value={s.full_name}>{s.full_name}</option>
+                    <option key={s.id} value={s.name}>{s.name} — {s.role}</option>
                   ))}
                 </select>
               </div>

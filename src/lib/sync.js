@@ -12,30 +12,38 @@ import {
   getUnsyncedProducts,   markProductSynced,
   getUnsyncedOrders,     markOrderSynced,
   getUnsyncedOrderItems, markOrderItemSynced,
-  upsertCategoryFromRemote, upsertProductFromRemote,
-  getAllIngredients, upsertIngredient,
+  upsertCategoryFromRemote, upsertProductFromRemote, upsertIngredientFromRemote,
+  getAllIngredients, upsertIngredient, markIngredientSynced,
+  getUnsyncedVariants, markVariantSynced,
   getPendingDeletes, clearPendingDelete,
+  getCategoryRemoteId,
   persistDb,
 } from './localDb.js'
 
-export async function syncToSupabase() {
+export async function syncToSupabase(log = null) {
+  const ok  = (msg) => { console.log(msg);        log?.('success', msg) }
+  const inf = (msg) => { console.log(msg);        log?.('info',    msg) }
+  const err = (msg, e) => { console.error(msg, e); log?.('error',  msg) }
+
   if (!isSupabaseReady) {
-    console.log('[sync] Supabase not configured — skipping sync')
+    inf('[Sync] Supabase yapılandırılmamış — senkronizasyon atlandı')
     return { categories: 0, products: 0, orders: 0, orderItems: 0 }
   }
 
-  let synced = { categories: 0, products: 0, ingredients: 0, orders: 0, orderItems: 0 }
+  let synced = { categories: 0, products: 0, ingredients: 0, variants: 0, orders: 0, orderItems: 0 }
 
   // ── Pending deletes ────────────────────────────────────────────
   const pendingDeletes = getPendingDeletes()
   for (const pd of pendingDeletes) {
-    const table = pd.entity_type === 'product' ? 'products' : 'categories'
+    const tableMap = { product: 'products', category: 'categories', ingredient: 'ingredients' }
+    const table = tableMap[pd.entity_type]
+    if (!table) { await clearPendingDelete(pd.id); continue }
     const { error } = await supabase.from(table).delete().eq('id', pd.remote_id)
     if (!error) {
       await clearPendingDelete(pd.id)
-      console.log(`[Sync] ✓ Deleted ${pd.entity_type} remote:${pd.remote_id} from Supabase`)
+      ok(`[Sync] ✓ Silindi: ${pd.entity_type} remote:${pd.remote_id}`)
     } else {
-      console.error(`[Sync] ✗ Failed to delete ${pd.entity_type} remote:${pd.remote_id}`, error)
+      err(`[Sync] ✗ Silinemedi: ${pd.entity_type} remote:${pd.remote_id}`, error)
     }
   }
 
@@ -51,9 +59,9 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markCategorySynced(id, data.id)
       synced.categories++
-      console.log(`[Sync] ✓ Category synced: "${name}" (local:${id} → remote:${data.id})`)
+      ok(`[Sync] ✓ Kategori: "${name}" (local:${id} → remote:${data.id})`)
     } else if (error) {
-      console.error('[Sync] ✗ Category upsert failed', error)
+      err('[Sync] ✗ Kategori yüklenemedi', error)
     }
   }
 
@@ -64,24 +72,24 @@ export async function syncToSupabase() {
     const { data, error } = await supabase
       .from('ingredients')
       .upsert(
-        { local_id: String(ing.id), name: ing.name, unit: ing.unit, stock_amount: ing.stockAmount, min_stock_alert: ing.minStockAlert },
+        { local_id: String(ing.id), name: ing.name, unit: ing.unit, stock_amount: ing.stockAmount, min_stock_alert: ing.minStockAlert, container_name: ing.containerName ?? null, container_size: ing.containerSize ?? 0, image_url: ing.imageUrl ?? null },
         { onConflict: 'local_id' }
       )
       .select('id')
       .single()
 
     if (!error && data) {
+      await markIngredientSynced(ing.id, data.id)
       synced.ingredients++
-      console.log(`[Sync] ✓ Ingredient synced: "${ing.name}" (local:${ing.id} → remote:${data.id})`)
+      ok(`[Sync] ✓ Malzeme: "${ing.name}" (local:${ing.id} → remote:${data.id})`)
     } else if (error) {
-      console.error('[Sync] ✗ Ingredient upsert failed', error)
+      err('[Sync] ✗ Malzeme yüklenemedi', error)
     }
   }
 
   // ── Products ───────────────────────────────────────────────────
   const prods = getUnsyncedProducts()
   for (const [id, name, price, stock, category_id, image_url, recipe] of prods) {
-    // If image is a local path, upload to Supabase Storage and get public URL
     let supabaseImageUrl = image_url
     if (image_url && image_url.startsWith('/products/')) {
       try {
@@ -89,18 +97,19 @@ export async function syncToSupabase() {
         const bytes = await window.electronAPI?.images?.readFileBytes(image_url)
         if (bytes) {
           supabaseImageUrl = await uploadProductImage(bytes, filename)
-          console.log(`[Sync] ↑ Image uploaded: ${filename} → ${supabaseImageUrl}`)
+          inf(`[Sync] ↑ Görsel yüklendi: ${filename}`)
         }
       } catch (imgErr) {
-        console.error('[Sync] ✗ Image upload failed — syncing without image', imgErr)
+        err('[Sync] ✗ Görsel yüklenemedi — görselsiz devam ediliyor', imgErr)
         supabaseImageUrl = null
       }
     }
 
+    const remoteCatId = getCategoryRemoteId(category_id)
     const { data, error } = await supabase
       .from('products')
       .upsert(
-        { local_id: String(id), name, price, stock, category_id: String(category_id), image_url: supabaseImageUrl, recipe },
+        { local_id: String(id), name, price, stock, category_id: remoteCatId ? Number(remoteCatId) : null, image_url: supabaseImageUrl, recipe },
         { onConflict: 'local_id' }
       )
       .select('id')
@@ -109,9 +118,30 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markProductSynced(id, data.id)
       synced.products++
-      console.log(`[Sync] ✓ Product synced: "${name}" ₺${price} (local:${id} → remote:${data.id})`)
+      ok(`[Sync] ✓ Ürün: "${name}" ₺${price} (local:${id} → remote:${data.id})`)
     } else if (error) {
-      console.error('[Sync] ✗ Product upsert failed', error)
+      err('[Sync] ✗ Ürün yüklenemedi', error)
+    }
+  }
+
+  // ── Product Variants ───────────────────────────────────────────
+  const variants = getUnsyncedVariants()
+  for (const [id, local_id, product_remote_id, name, price] of variants) {
+    if (!product_remote_id) continue
+    const { data, error } = await supabase
+      .from('product_variants')
+      .upsert(
+        { local_id: String(local_id ?? id), product_id: Number(product_remote_id), name, price },
+        { onConflict: 'local_id' }
+      )
+      .select('id')
+      .single()
+    if (!error && data) {
+      await markVariantSynced(id, data.id)
+      synced.variants++
+      ok(`[Sync] ✓ Varyant: "${name}" ₺${price} (local:${id} → remote:${data.id})`)
+    } else if (error) {
+      err('[Sync] ✗ Varyant yüklenemedi', error)
     }
   }
 
@@ -130,22 +160,24 @@ export async function syncToSupabase() {
     if (!error && data) {
       await markOrderSynced(id, data.id)
       synced.orders++
-      console.log(`[Sync] ✓ Order synced: local_id=${local_id} | ₺${total} | ${payment_method} | ${status} (remote:${data.id})`)
+      ok(`[Sync] ✓ Sipariş: ₺${total} | ${payment_method} | ${status} (remote:${data.id})`)
     } else if (error) {
-      console.error('[Sync] ✗ Order upsert failed', error)
+      err('[Sync] ✗ Sipariş yüklenemedi', error)
     }
   }
 
-  // ── Order items (only after parent order has a remote_id) ──────
+  // ── Order items ────────────────────────────────────────────────
   const items = getUnsyncedOrderItems()
   let itemDirty = false
-  for (const [id, local_id, order_remote_id, quantity, unit_price] of items) {
-    if (!order_remote_id) continue  // parent order not yet synced — skip
+  for (const [id, local_id, order_remote_id, quantity, unit_price, product_remote_id, variant_remote_id] of items) {
+    if (!order_remote_id) continue
 
     const { error } = await supabase
       .from('order_items')
       .upsert(
-        { local_id, order_id: order_remote_id, quantity, unit_price },
+        { local_id, order_id: order_remote_id, quantity, unit_price,
+          product_id: product_remote_id ? Number(product_remote_id) : null,
+          variant_id: variant_remote_id ? Number(variant_remote_id) : null },
         { onConflict: 'local_id' }
       )
 
@@ -153,30 +185,35 @@ export async function syncToSupabase() {
       markOrderItemSynced(id)
       itemDirty = true
       synced.orderItems++
-      console.log(`[Sync] ✓ Order item synced: local_id=${local_id} | qty:${quantity} × ₺${unit_price} → order:${order_remote_id}`)
+      ok(`[Sync] ✓ Sipariş kalemi: ${quantity}× ₺${unit_price} → sipariş:${order_remote_id}`)
     } else {
-      console.error('[Sync] ✗ Order item upsert failed', error)
+      err('[Sync] ✗ Sipariş kalemi yüklenemedi', error)
     }
   }
   if (itemDirty) await persistDb()
 
-  const anyWork = synced.categories + synced.products + synced.ingredients + synced.orders + synced.orderItems
+  const anyWork = synced.categories + synced.products + synced.ingredients + synced.variants + synced.orders + synced.orderItems
   if (anyWork > 0) {
-    console.log(`[Sync] ── Sync complete ── cats:${synced.categories} prods:${synced.products} ings:${synced.ingredients} orders:${synced.orders} items:${synced.orderItems}`)
+    inf(`[Sync] ── Yükleme tamamlandı ── kat:${synced.categories} ürün:${synced.products} malz:${synced.ingredients} varyant:${synced.variants} sipariş:${synced.orders} kalem:${synced.orderItems}`)
+  } else {
+    inf('[Sync] Yüklenecek yeni kayıt yok')
   }
   return synced
 }
 
-export async function pullFromSupabase() {
+export async function pullFromSupabase(log = null) {
+  const ok  = (msg) => { console.log(msg);        log?.('success', msg) }
+  const err = (msg, e) => { console.error(msg, e); log?.('error',  msg) }
+
   if (!isSupabaseReady) {
-    console.log('[Sync] Supabase not configured — skipping pull')
+    log?.('info', '[Sync] Supabase yapılandırılmamış — çekme atlandı')
     return
   }
 
-  // Build sets of remote IDs that are pending deletion — skip these during pull
   const pendingDeletes = getPendingDeletes()
   const pendingCatIds  = new Set(pendingDeletes.filter(p => p.entity_type === 'category').map(p => p.remote_id))
   const pendingProdIds = new Set(pendingDeletes.filter(p => p.entity_type === 'product').map(p => p.remote_id))
+  const pendingIngIds  = new Set(pendingDeletes.filter(p => p.entity_type === 'ingredient').map(p => p.remote_id))
 
   // ── Pull categories ────────────────────────────────────────────
   const { data: cats, error: catErr } = await supabase
@@ -184,14 +221,14 @@ export async function pullFromSupabase() {
     .select('id, name, color, icon')
 
   if (catErr) {
-    console.error('[Sync] ✗ Failed to pull categories', catErr)
+    err('[Sync] ✗ Kategoriler çekilemedi', catErr)
   } else if (cats) {
     for (const c of cats) {
-      if (pendingCatIds.has(c.id)) continue  // locally deleted — skip
+      if (pendingCatIds.has(c.id)) continue
       await upsertCategoryFromRemote({ remoteId: c.id, name: c.name, color: c.color, icon: c.icon })
     }
     await persistDb()
-    console.log(`[Sync] ↓ Pulled ${cats.length} categories from Supabase`)
+    ok(`[Sync] ↓ ${cats.length} kategori çekildi`)
   }
 
   // ── Pull ingredients ───────────────────────────────────────────
@@ -200,11 +237,12 @@ export async function pullFromSupabase() {
     .select('id, name, unit, stock_amount, min_stock_alert')
 
   if (ingErr) {
-    console.error('[Sync] ✗ Failed to pull ingredients', ingErr)
+    err('[Sync] ✗ Malzemeler çekilemedi', ingErr)
   } else if (ings) {
     for (const ing of ings) {
-      await upsertIngredient({
-        id:            ing.id,
+      if (pendingIngIds.has(ing.id)) continue
+      await upsertIngredientFromRemote({
+        remoteId:      ing.id,
         name:          ing.name,
         unit:          ing.unit,
         stockAmount:   ing.stock_amount,
@@ -212,7 +250,7 @@ export async function pullFromSupabase() {
       })
     }
     await persistDb()
-    console.log(`[Sync] ↓ Pulled ${ings.length} ingredients from Supabase`)
+    ok(`[Sync] ↓ ${ings.length} malzeme çekildi`)
   }
 
   // ── Pull products ──────────────────────────────────────────────
@@ -221,10 +259,10 @@ export async function pullFromSupabase() {
     .select('id, name, price, stock, category_id, image_url')
 
   if (prodErr) {
-    console.error('[Sync] ✗ Failed to pull products', prodErr)
+    err('[Sync] ✗ Ürünler çekilemedi', prodErr)
   } else if (prods) {
     for (const p of prods) {
-      if (pendingProdIds.has(p.id)) continue  // locally deleted — skip
+      if (pendingProdIds.has(p.id)) continue
       await upsertProductFromRemote({
         remoteId: p.id,
         name: p.name,
@@ -235,6 +273,6 @@ export async function pullFromSupabase() {
       })
     }
     await persistDb()
-    console.log(`[Sync] ↓ Pulled ${prods.length} products from Supabase`)
+    ok(`[Sync] ↓ ${prods.length} ürün çekildi`)
   }
 }

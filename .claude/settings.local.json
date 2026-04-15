@@ -5,7 +5,9 @@
       "Bash(find:*)",
       "Bash(file:*)",
       "Bash(npx:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "mcp__ide__getDiagnostics",
+      "mcp__plugin_supabase_supabase__execute_sql"
     ]
   }
 }

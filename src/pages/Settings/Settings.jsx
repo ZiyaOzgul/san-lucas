@@ -253,7 +253,8 @@ function Settings() {
   const {
     tableDefs,  addTableDef,  editTableDef,  removeTableDef,
     categories, addCategory,  editCategory,  removeCategory,
-    isSyncing, lastSyncAt, unsyncedCount, triggerSync, resetAllData,
+    isSyncing, lastSyncAt, unsyncedCount, triggerSync, resetAllData, resetOnlineData,
+    syncLogs,
     kdvRate, setKdvRatePersist,
   } = useApp()
   const { isOnline } = useOnlineStatus()
@@ -262,6 +263,8 @@ function Settings() {
   const [autoEditTableId, setAutoEditTableId] = useState(null)
   const [autoEditCatId,   setAutoEditCatId]   = useState(null)
   const [tableError,      setTableError]      = useState(null)
+  const [resetModal,      setResetModal]      = useState(null) // null | 'choose' | 'local' | 'online'
+  const [resetLoading,    setResetLoading]    = useState(false)
   const [catError,        setCatError]        = useState(null)
 
   const sectionRefs = {
@@ -333,6 +336,7 @@ function Settings() {
   }
 
   return (
+    <>
     <div className="settings-page">
 
       {/* ── Page header ── */}
@@ -474,6 +478,18 @@ function Settings() {
                     : 'Şimdi Senkronize Et'
                 }
               </button>
+              {syncLogs.length > 0 && (
+                <div className="st-sync-log">
+                  {syncLogs.map(entry => (
+                    <div key={entry.id} className={`st-sync-log-entry st-sync-log-entry--${entry.type}`}>
+                      <span className="st-sync-log-time">
+                        {entry.time.toLocaleTimeString('tr-TR')}
+                      </span>
+                      <span className="st-sync-log-text">{entry.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -511,10 +527,7 @@ function Settings() {
                   </button>
                   <button
                     className="st-quick-row st-quick-row--danger"
-                    onClick={async () => {
-                      if (!window.confirm('Tüm ürünler, kategoriler ve siparişler silinecek. Masalar korunacak. Emin misiniz?')) return
-                      await resetAllData()
-                    }}
+                    onClick={() => setResetModal('choose')}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                     <span>Tüm Verileri Sıfırla</span>
@@ -527,6 +540,94 @@ function Settings() {
         </div>
       </div>
     </div>
+
+    {/* ── Reset Data Modal ─────────────────────────────────── */}
+    {resetModal && (
+      <div className="st-reset-overlay" onClick={() => !resetLoading && setResetModal(null)}>
+        <div className="st-reset-modal" onClick={e => e.stopPropagation()}>
+
+          {resetModal === 'choose' && (
+            <>
+              <div className="st-reset-modal__header">
+                <span className="st-reset-modal__title">Verileri Sıfırla</span>
+                <span className="st-reset-modal__sub">Hangi verileri sıfırlamak istiyorsunuz?</span>
+              </div>
+              <div className="st-reset-options">
+                <button className="st-reset-option st-reset-option--local" onClick={() => setResetModal('local')}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                  <span className="st-reset-option__title">Yerel Veri</span>
+                  <span className="st-reset-option__desc">Bu cihazdaki SQLite veritabanını temizler. Ürünler, kategoriler ve siparişler silinir.</span>
+                </button>
+                <button className="st-reset-option st-reset-option--online" onClick={() => setResetModal('online')}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                  <span className="st-reset-option__title">Çevrimiçi Veri</span>
+                  <span className="st-reset-option__desc">Supabase üzerindeki tüm verileri siler. Yerel veri de temizlenir.</span>
+                </button>
+              </div>
+              <button className="st-reset-cancel" onClick={() => setResetModal(null)}>İptal</button>
+            </>
+          )}
+
+          {resetModal === 'local' && (
+            <>
+              <div className="st-reset-modal__header">
+                <span className="st-reset-modal__title">Yerel Verileri Sıfırla</span>
+              </div>
+              <div className="st-reset-warning">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <p>Bu cihazdaki tüm <strong>ürünler, kategoriler ve siparişler</strong> silinecek. Masalar korunacak. Bu işlem geri alınamaz.</p>
+              </div>
+              <div className="st-reset-actions">
+                <button className="st-reset-cancel" onClick={() => setResetModal(null)} disabled={resetLoading}>İptal</button>
+                <button
+                  className="st-reset-confirm-btn"
+                  disabled={resetLoading}
+                  onClick={async () => {
+                    setResetLoading(true)
+                    try { await resetAllData() } finally {
+                      setResetLoading(false)
+                      setResetModal(null)
+                    }
+                  }}
+                >
+                  {resetLoading ? 'Sıfırlanıyor…' : 'Yerel Sıfırla'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {resetModal === 'online' && (
+            <>
+              <div className="st-reset-modal__header">
+                <span className="st-reset-modal__title">Çevrimiçi Verileri Sıfırla</span>
+              </div>
+              <div className="st-reset-warning st-reset-warning--online">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <p>Supabase üzerindeki <strong>tüm veriler kalıcı olarak silinecek</strong>: siparişler, ürünler, kategoriler, malzemeler. Yerel veri de temizlenecek. Bu işlem geri alınamaz.</p>
+              </div>
+              <div className="st-reset-actions">
+                <button className="st-reset-cancel" onClick={() => setResetModal(null)} disabled={resetLoading}>İptal</button>
+                <button
+                  className="st-reset-confirm-btn st-reset-confirm-btn--online"
+                  disabled={resetLoading}
+                  onClick={async () => {
+                    setResetLoading(true)
+                    try { await resetOnlineData() } finally {
+                      setResetLoading(false)
+                      setResetModal(null)
+                    }
+                  }}
+                >
+                  {resetLoading ? 'Sıfırlanıyor…' : 'Çevrimiçi Sıfırla'}
+                </button>
+              </div>
+            </>
+          )}
+
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 

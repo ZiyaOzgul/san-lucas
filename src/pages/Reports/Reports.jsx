@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -7,6 +7,10 @@ import {
 import {
   getReportKpis, getTopProduct, getRevenueByPeriod,
   getPaymentBreakdown, getTableRevenue, getTopProducts, getProductSalesDetail,
+  getTableProductBreakdown, getProductTableBreakdown,
+  getCategoryRevenue, getIngredientConsumption,
+  getOrdersList, getOrderItems,
+  getStaffPerformance, getStaffItemBreakdown,
 } from '../../lib/localDb.js'
 import './Reports.css'
 
@@ -67,6 +71,15 @@ function Reports() {
   const [tableRevData, setTableRevData] = useState([])
   const [topProducts,  setTopProducts]  = useState([])
   const [detailData,   setDetailData]   = useState([])
+  const [tableModal,   setTableModal]   = useState(null)
+  const [productModal, setProductModal] = useState(null)
+  const [categoryData,    setCategoryData]    = useState([])
+  const [staffData,       setStaffData]       = useState([])
+  const [staffModal,      setStaffModal]      = useState(null)
+  const [ingredientData,  setIngredientData]  = useState([])
+  const [ordersList,      setOrdersList]      = useState([])
+  const [expandedOrderId, setExpandedOrderId] = useState(null)
+  const [expandedItems,   setExpandedItems]   = useState([])
 
   useEffect(() => {
     if (!dbReady) return
@@ -78,11 +91,50 @@ function Reports() {
     setTableRevData(getTableRevenue(start, end))
     setTopProducts(getTopProducts(start, end))
     setDetailData(getProductSalesDetail(start, end))
+    setCategoryData(getCategoryRevenue(start, end))
+    setStaffData(getStaffPerformance(start, end))
+    setIngredientData(getIngredientConsumption(start, end))
+    setOrdersList(getOrdersList(start, end))
+    setExpandedOrderId(null)
   }, [activeTab, dbReady])
 
   const tab = TABS.find(t => t.id === activeTab)
   const totalPayment = paymentData.reduce((s, d) => s + d.value, 0)
   const maxTableRev  = tableRevData.reduce((m, r) => Math.max(m, r.value), 0) || 1
+
+  function openTableModal(row) {
+    const [start, end] = getDateRange(activeTab)
+    const items = getTableProductBreakdown(row.name, start, end)
+    setTableModal({ name: row.name, items, total: row.value })
+  }
+
+  function openProductModal(p) {
+    const [start, end] = getDateRange(activeTab)
+    const rows = getProductTableBreakdown(p.name, start, end)
+    setProductModal({ name: p.name, qty: p.qty, revenue: p.revenue, rows })
+  }
+
+  function toggleOrder(id) {
+    if (expandedOrderId === id) {
+      setExpandedOrderId(null)
+      setExpandedItems([])
+    } else {
+      setExpandedOrderId(id)
+      setExpandedItems(getOrderItems(id))
+    }
+  }
+
+  function openStaffModal(row) {
+    const [start, end] = getDateRange(activeTab)
+    const items = getStaffItemBreakdown(row.name, start, end)
+    setStaffModal({ name: row.name, orderCount: row.orderCount, revenue: row.revenue, items })
+  }
+
+  function stockStatus(row) {
+    if (row.currentStock <= 0) return 'critical'
+    if (row.minStockAlert > 0 && row.currentStock <= row.minStockAlert) return 'low'
+    return 'ok'
+  }
 
   const xAxisInterval = activeTab === 'month' ? 4 : 0
 
@@ -174,7 +226,7 @@ function Reports() {
             ) : (
               <div className="rpt-table-bars">
                 {tableRevData.map(row => (
-                  <div key={row.name} className="rpt-bar-row">
+                  <div key={row.name} className="rpt-bar-row" onClick={() => openTableModal(row)}>
                     <span className="rpt-bar-row__name">{row.name}</span>
                     <div className="rpt-bar-row__track">
                       <div
@@ -255,7 +307,7 @@ function Reports() {
             ) : (
               <ol className="rpt-top-list">
                 {topProducts.map((p, i) => (
-                  <li key={p.name} className="rpt-top-item">
+                  <li key={p.name} className="rpt-top-item" onClick={() => openProductModal(p)}>
                     <span className="rpt-top-num">{i + 1}</span>
                     <span className="rpt-top-name">{p.name}</span>
                     <span className="rpt-top-qty">{p.qty} adet</span>
@@ -309,6 +361,272 @@ function Reports() {
           </table>
         )}
       </div>
+
+      {/* ── Category + Staff row ── */}
+      <div className="rpt-two-col">
+        {/* Category revenue */}
+        <div className="rpt-card">
+          <div className="rpt-card__header">
+            <span className="rpt-card__title">Kategori Bazlı Satış</span>
+          </div>
+          {categoryData.length === 0 ? (
+            <p className="rpt-empty">Bu dönemde satış verisi yok.</p>
+          ) : (
+            <table className="rpt-table">
+              <thead><tr><th>Kategori</th><th>Adet</th><th>Ciro</th><th>Pay</th></tr></thead>
+              <tbody>
+                {categoryData.map(r => (
+                  <tr key={r.category}>
+                    <td className="rpt-table__name">{r.category}</td>
+                    <td>{r.qty}</td>
+                    <td>{fmtCurrency(r.revenue)}</td>
+                    <td>
+                      <div className="rpt-pct-bar">
+                        <div className="rpt-pct-bar__fill" style={{ width: `${r.pct}%` }} />
+                        <span>{r.pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Staff performance */}
+        <div className="rpt-card">
+          <div className="rpt-card__header">
+            <span className="rpt-card__title">Personel Performansı</span>
+          </div>
+          {staffData.length === 0 ? (
+            <p className="rpt-empty">Bu dönemde personel verisi yok.</p>
+          ) : (
+            <table className="rpt-table rpt-table--clickable">
+              <thead><tr><th>Garson</th><th>Sipariş</th><th>Ciro</th></tr></thead>
+              <tbody>
+                {staffData.map(r => (
+                  <tr key={r.name} onClick={() => openStaffModal(r)} className="rpt-row--hover">
+                    <td className="rpt-table__name">{r.name}</td>
+                    <td>{r.orderCount}</td>
+                    <td>{fmtCurrency(r.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* ── Ingredient tracking ── */}
+      <div className="rpt-card">
+        <div className="rpt-card__header">
+          <span className="rpt-card__title">Malzeme Takibi</span>
+          <span className="rpt-card__sub">Dönem tüketimi & mevcut stok</span>
+        </div>
+        {ingredientData.length === 0 ? (
+          <p className="rpt-empty">Malzeme verisi yok.</p>
+        ) : (
+          <table className="rpt-table">
+            <thead>
+              <tr>
+                <th>Malzeme</th>
+                <th>Birim</th>
+                <th>Mevcut Stok</th>
+                <th>Dönem Tüketimi</th>
+                <th>Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ingredientData.map(r => {
+                const status = stockStatus(r)
+                return (
+                  <tr key={r.id}>
+                    <td className="rpt-table__name">{r.name}</td>
+                    <td>{r.unit}</td>
+                    <td>{Number(r.currentStock).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                    <td>{r.consumed > 0 ? Number(r.consumed).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '—'}</td>
+                    <td>
+                      <span className={`rpt-stock-badge rpt-stock-badge--${status}`}>
+                        {status === 'ok' ? 'Yeterli' : status === 'low' ? 'Az' : 'Tükendi'}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Order history ── */}
+      <div className="rpt-card">
+        <div className="rpt-card__header">
+          <span className="rpt-card__title">Sipariş Geçmişi</span>
+          <span className="rpt-card__sub">{ordersList.length} sipariş — tıkla detay gör</span>
+        </div>
+        {ordersList.length === 0 ? (
+          <p className="rpt-empty">Bu dönemde sipariş yok.</p>
+        ) : (
+          <table className="rpt-table rpt-table--clickable">
+            <thead>
+              <tr>
+                <th>Saat</th>
+                <th>Masa</th>
+                <th>Ürünler</th>
+                <th>Ödeme</th>
+                <th>Garson</th>
+                <th>Toplam</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ordersList.map(order => (
+                <Fragment key={order.id}>
+                  <tr
+                    className={`rpt-row--hover${expandedOrderId === order.id ? ' rpt-row--active' : ''}`}
+                    onClick={() => toggleOrder(order.id)}
+                  >
+                    <td className="rpt-order-time">
+                      {new Date(order.closedAt).toLocaleString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td>{order.tableName}</td>
+                    <td className="rpt-order-summary">{order.itemsSummary}</td>
+                    <td>
+                      <span className={`rpt-pay-badge rpt-pay-badge--${order.paymentMethod}`}>
+                        {order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod === 'card' ? 'Kart' : 'Karma'}
+                      </span>
+                    </td>
+                    <td>{order.waiterName || '—'}</td>
+                    <td className="rpt-order-total">{fmtCurrency(order.total)}</td>
+                  </tr>
+                  {expandedOrderId === order.id && (
+                    <tr className="rpt-order-expanded">
+                      <td colSpan={6}>
+                        <div className="rpt-order-items">
+                          {expandedItems.map((item, i) => (
+                            <div key={i} className="rpt-order-item">
+                              <span className="rpt-order-item__name">{item.name}</span>
+                              <span className="rpt-order-item__qty">×{item.quantity}</span>
+                              <span className="rpt-order-item__price">{fmtCurrency(item.unitPrice)}</span>
+                              <span className="rpt-order-item__sub">{fmtCurrency(item.unitPrice * item.quantity)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Table detail modal ── */}
+      {tableModal && (
+        <div className="rpt-modal-overlay" onClick={() => setTableModal(null)}>
+          <div className="rpt-modal" onClick={e => e.stopPropagation()}>
+            <div className="rpt-modal-header">
+              <h3>{tableModal.name}</h3>
+              <button onClick={() => setTableModal(null)}>✕</button>
+            </div>
+            <div className="rpt-modal-body">
+              {tableModal.items.length === 0 ? (
+                <p className="rpt-empty">Veri yok.</p>
+              ) : (
+                <table className="rpt-modal-table">
+                  <thead>
+                    <tr><th>Ürün</th><th>Adet</th><th>Ciro</th></tr>
+                  </thead>
+                  <tbody>
+                    {tableModal.items.map(r => (
+                      <tr key={r.name}>
+                        <td>{r.name}</td>
+                        <td>{r.qty}</td>
+                        <td>{fmtCurrency(r.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td>Toplam</td>
+                      <td></td>
+                      <td>{fmtCurrency(tableModal.total)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Product detail modal ── */}
+      {productModal && (
+        <div className="rpt-modal-overlay" onClick={() => setProductModal(null)}>
+          <div className="rpt-modal" onClick={e => e.stopPropagation()}>
+            <div className="rpt-modal-header">
+              <div>
+                <h3>{productModal.name}</h3>
+                <span>{productModal.qty} adet · {fmtCurrency(productModal.revenue)}</span>
+              </div>
+              <button onClick={() => setProductModal(null)}>✕</button>
+            </div>
+            <div className="rpt-modal-body">
+              {productModal.rows.length === 0 ? (
+                <p className="rpt-empty">Veri yok.</p>
+              ) : (
+                <table className="rpt-modal-table">
+                  <thead>
+                    <tr><th>Masa</th><th>Adet</th><th>Ciro</th></tr>
+                  </thead>
+                  <tbody>
+                    {productModal.rows.map(r => (
+                      <tr key={r.table}>
+                        <td>{r.table}</td>
+                        <td>{r.qty}</td>
+                        <td>{fmtCurrency(r.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Staff detail modal ── */}
+      {staffModal && (
+        <div className="rpt-modal-overlay" onClick={() => setStaffModal(null)}>
+          <div className="rpt-modal" onClick={e => e.stopPropagation()}>
+            <div className="rpt-modal-header">
+              <div>
+                <h3>{staffModal.name}</h3>
+                <span>{staffModal.orderCount} sipariş · {fmtCurrency(staffModal.revenue)}</span>
+              </div>
+              <button onClick={() => setStaffModal(null)}>✕</button>
+            </div>
+            <div className="rpt-modal-body">
+              {staffModal.items.length === 0 ? (
+                <p className="rpt-empty">Veri yok.</p>
+              ) : (
+                <table className="rpt-modal-table">
+                  <thead><tr><th>Ürün</th><th>Adet</th><th>Ciro</th></tr></thead>
+                  <tbody>
+                    {staffModal.items.map(r => (
+                      <tr key={r.name}>
+                        <td>{r.name}</td>
+                        <td>{r.qty}</td>
+                        <td>{fmtCurrency(r.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

@@ -1,13 +1,16 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
 const path = require('path')
 const fs   = require('fs')
 
 function createWindow() {
+  Menu.setApplicationMenu(null)
+
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 1024,
     minHeight: 600,
+    fullscreen: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -19,9 +22,17 @@ function createWindow() {
 
   if (isDev) {
     win.loadURL('http://localhost:5173')
+    win.webContents.openDevTools()
   } else {
     win.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+
+  // F11 toggles fullscreen / windowed
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      win.setFullScreen(!win.isFullScreen())
+    }
+  })
 }
 
 ipcMain.on('get-user-data-path', (event) => {
