@@ -46,6 +46,7 @@ const NAV_ITEMS = [
 ]
 
 function Navbar() {
+
   return (
     <nav className="navbar">
       <div className="navbar__brand">

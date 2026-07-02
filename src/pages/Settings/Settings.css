@@ -513,6 +513,53 @@
   text-align: center;
 }
 
+/* ── Category image area ── */
+.st-cat-image {
+  width: 100%;
+  aspect-ratio: 16/9;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 8px;
+  transition: opacity 0.15s;
+}
+.st-cat-image:hover { opacity: 0.85; }
+.st-cat-image__hint {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.st-cat-image:hover .st-cat-image__hint { opacity: 1; }
+
+.st-cat-image-remove {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.st-cat-card:hover .st-cat-image-remove { opacity: 1; }
+
 .st-cat-actions {
   position: absolute;
   bottom: 6px;
@@ -539,10 +586,60 @@
 .st-kdv-input {
   width: 80px;
 }
+.st-kdv-input:disabled {
+  background-color: var(--color-bg-page);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
 .st-kdv-suffix {
   font-size: 0.95rem;
   color: var(--color-text-secondary);
   font-weight: 500;
+}
+
+.st-kdv-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.st-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background-color: var(--color-border);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s;
+}
+
+.st-switch--on {
+  background-color: var(--color-accent);
+}
+
+.st-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 0.15s;
+}
+
+.st-switch--on .st-switch__thumb {
+  transform: translateX(18px);
+}
+
+.st-switch-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
 }
 
 .st-quick-actions {
@@ -839,3 +936,112 @@
 .st-sync-log-text { color: var(--color-text-secondary); }
 .st-sync-log-entry--success .st-sync-log-text { color: var(--color-success); }
 .st-sync-log-entry--error   .st-sync-log-text { color: var(--color-danger); }
+
+/* ── Category modifier editor ───────────────────────────────────── */
+.st-mod-cat-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.st-mod-cat-tab {
+  padding: 7px 14px;
+  background: var(--color-bg-page);
+  border: 1.5px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.st-mod-cat-tab:hover {
+  background: var(--color-bg-card);
+}
+
+.st-mod-cat-tab--active {
+  background: var(--color-bg-card);
+  font-weight: 800;
+}
+
+.st-mod-help {
+  margin: 10px 0 4px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.st-mod-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.st-mod-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--color-bg-page);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.st-mod-row__name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  outline: none;
+  padding: 4px 0;
+}
+
+.st-mod-row__name:focus {
+  border-bottom: 1.5px solid var(--color-accent);
+}
+
+.st-mod-row__price-wrap {
+  display: flex;
+  align-items: center;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 2px 8px;
+  width: 100px;
+}
+
+.st-mod-row__price-prefix {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  margin-right: 4px;
+}
+
+.st-mod-row__price {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  outline: none;
+  padding: 4px 0;
+  text-align: right;
+  /* hide number input spinners */
+  -moz-appearance: textfield;
+}
+
+.st-mod-row__price::-webkit-inner-spin-button,
+.st-mod-row__price::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

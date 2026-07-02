@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
+import ConfirmModal from '../../components/ConfirmModal/ConfirmModal.jsx'
 import './Ingredients.css'
 
 const UNITS = ['ml', 'L', 'g', 'kg', 'adet', 'dilim', 'çay kaşığı', 'yemek kaşığı']
@@ -155,6 +156,7 @@ function Ingredients() {
   const [search,     setSearch]     = useState('')
   const [editItem,   setEditItem]   = useState(undefined) // undefined=closed, null=new, obj=edit
   const [hoveredId,  setHoveredId]  = useState(null)
+  const [confirmDel, setConfirmDel] = useState(null) // ingredient object
 
   const filtered = ingredients.filter(i =>
     i.name.toLowerCase().includes(search.toLowerCase())
@@ -260,7 +262,7 @@ function Ingredients() {
                       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                     </svg>
                   </button>
-                  <button className="product-card__action-btn product-card__action-btn--danger" onClick={() => removeIngredient(ing.id)} title="Sil">
+                  <button className="product-card__action-btn product-card__action-btn--danger" onClick={() => setConfirmDel(ing)} title="Sil">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                       <path d="M10 11v6"/><path d="M14 11v6"/>
@@ -287,6 +289,19 @@ function Ingredients() {
           onClose={() => setEditItem(undefined)}
         />
       )}
+
+      <ConfirmModal
+        open={!!confirmDel}
+        title="Malzemeyi Sil"
+        message={confirmDel ? `"${confirmDel.name}" malzemesini silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.` : ''}
+        confirmText="Sil"
+        onConfirm={async () => {
+          const id = confirmDel?.id
+          setConfirmDel(null)
+          if (id != null) await removeIngredient(id)
+        }}
+        onCancel={() => setConfirmDel(null)}
+      />
     </div>
   )
 }

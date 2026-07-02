@@ -574,3 +574,322 @@
   letter-spacing: 0.3px;
   flex-shrink: 0;
 }
+
+/* ── Mode tabs (Tek / Eşit Böl / Tutar Gir / Ürün Ürün) ─────────── */
+.pm-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.pm-mode-tab {
+  padding: 10px 6px;
+  background: var(--color-bg-page, #f5f5f0);
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pm-mode-tab:hover { background: var(--color-bg-card, #fff); }
+
+.pm-mode-tab--active {
+  background: var(--color-accent, #e8975a);
+  color: #fff;
+  border-color: var(--color-accent, #e8975a);
+}
+
+.pm-mode-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--color-bg-page, #f5f5f0);
+  border-radius: 12px;
+  margin-bottom: 10px;
+}
+
+.pm-mode-panel__hint {
+  font-size: 12px;
+  color: var(--color-text-secondary, #6b7280);
+  margin: 0 0 4px;
+  line-height: 1.5;
+}
+
+/* ── Split mode ── */
+.pm-split-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+
+.pm-split-stepper__label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.pm-split-stepper__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-bg-card, #fff);
+  border-radius: 999px;
+  padding: 4px 6px;
+}
+
+.pm-split-stepper__controls button {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background: var(--color-bg-page, #f5f5f0);
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--color-text-primary, #1a1a2e);
+}
+
+.pm-split-stepper__controls span {
+  min-width: 24px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--color-text-primary, #1a1a2e);
+}
+
+.pm-split-share {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--color-success-light, #dcfce7);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--color-success, #22c55e);
+  letter-spacing: 0.3px;
+}
+
+.pm-split-share strong {
+  font-size: 18px;
+  letter-spacing: -0.3px;
+}
+
+/* ── Custom mode ── */
+.pm-drafts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.pm-draft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--color-bg-card, #fff);
+  border-radius: 10px;
+}
+
+.pm-draft__method { font-size: 16px; }
+
+.pm-draft__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.pm-draft__info strong {
+  font-size: 13px;
+  color: var(--color-text-primary, #1a1a2e);
+}
+
+.pm-draft__info span {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.pm-draft__remove {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--color-danger-light, #fee2e2);
+  color: var(--color-danger, #ef4444);
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pm-draft__sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-card, #fff);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.pm-draft__sum strong {
+  color: var(--color-text-primary, #1a1a2e);
+  font-size: 14px;
+}
+
+.pm-draft__remaining {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-accent, #e8975a);
+  font-weight: 700;
+}
+
+.pm-field-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: var(--color-text-secondary, #6b7280);
+  margin-top: 4px;
+}
+
+.pm-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pm-text-input {
+  flex: 1;
+  padding: 12px 14px;
+  background: var(--color-bg-card, #fff);
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary, #1a1a2e);
+  font-family: inherit;
+  outline: none;
+}
+
+.pm-text-input:focus { border-color: var(--color-accent, #e8975a); }
+
+.pm-fill-btn {
+  padding: 12px 14px;
+  background: var(--color-success-light, #dcfce7);
+  color: var(--color-success, #22c55e);
+  border: none;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pm-add-draft-btn {
+  padding: 12px;
+  background: var(--color-accent, #e8975a);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+/* ── Item mode ── */
+.pm-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.pm-item-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--color-bg-card, #fff);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pm-item-pick:hover { background: var(--color-bg-page, #f5f5f0); }
+
+.pm-item-pick--on {
+  background: var(--color-success-light, #dcfce7);
+  outline: 1px solid var(--color-success, #22c55e);
+}
+
+.pm-item-pick__check {
+  font-size: 18px;
+  color: var(--color-success, #22c55e);
+}
+
+.pm-item-pick__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pm-item-pick__main strong {
+  font-size: 13px;
+  color: var(--color-text-primary, #1a1a2e);
+  font-weight: 700;
+}
+
+.pm-item-pick__note {
+  font-size: 11px;
+  color: var(--color-success, #22c55e);
+  font-weight: 700;
+}
+
+.pm-item-pick__price {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.pm-item-pick__total {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--color-accent, #e8975a);
+}
+
+/* ── Commit summary ── */
+.pm-commit-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 4px;
+  margin-top: 4px;
+}
+
+.pm-commit-summary span {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.pm-commit-summary strong {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--color-text-primary, #1a1a2e);
+  letter-spacing: -0.5px;
+}
+
+.pm-commit-summary__error {
+  color: var(--color-danger, #ef4444) !important;
+}

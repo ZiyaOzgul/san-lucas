@@ -7,19 +7,26 @@ function useOnlineStatus({ onReconnect } = {}) {
   onReconnectRef.current = onReconnect
 
   useEffect(() => {
+    console.log(`[Online] hook init — navigator.onLine=${navigator.onLine}, supabaseReady=${isSupabaseReady}`)
     const handleOnline = async () => {
-      // Confirm real Supabase connectivity before declaring online
+      console.log('[Online] browser online event — Supabase erişilebilirliği test ediliyor…')
       if (isSupabaseReady) {
         try {
-          await supabase.from('categories').select('id').limit(1)
-        } catch {
-          return  // browser fired 'online' but Supabase is unreachable
+          const { error } = await supabase.from('categories').select('id').limit(1)
+          if (error) {
+            console.warn('[Online] Supabase erişilemez — online işaretlemiyoruz', error)
+            return
+          }
+        } catch (e) {
+          console.warn('[Online] Supabase ping atılamadı — online işaretlemiyoruz', e)
+          return
         }
       }
+      console.log('[Online] ✓ online doğrulandı, onReconnect tetikleniyor')
       setIsOnline(true)
       onReconnectRef.current?.()
     }
-    const handleOffline = () => setIsOnline(false)
+    const handleOffline = () => { console.log('[Online] browser offline event'); setIsOnline(false) }
 
     window.addEventListener('online',  handleOnline)
     window.addEventListener('offline', handleOffline)

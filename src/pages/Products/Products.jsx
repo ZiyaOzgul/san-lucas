@@ -1,15 +1,32 @@
 import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
+import ConfirmModal from '../../components/ConfirmModal/ConfirmModal.jsx'
 import './Products.css'
 
 // ── Add/Edit Modal ────────────────────────────────────────────────
-function ProductModal({ product, categories, ingredients, existingVariants, existingProductIngredients, onSave, onClose }) {
+function ProductModal({
+  product, categories, ingredients,
+  existingVariants, existingProductIngredients,
+  modifiers, initialExcludes,
+  onSave, onClose,
+}) {
   const isEdit = !!product
   const [name,       setName]       = useState(product?.name       ?? '')
   const [price,      setPrice]      = useState(product?.price      ?? '')
   const [categoryId, setCategoryId] = useState(product?.categoryId ?? (categories[0]?.id ?? ''))
   const [imageUrl,   setImageUrl]   = useState(product?.imageUrl   ?? null)
   const [recipe,     setRecipe]     = useState(product?.recipe     ?? '')
+  const [pointsValue, setPointsValue] = useState(product?.pointsValue ?? 0)
+  // excludes: set of category-modifier ids this product opts out of
+  const [excludes, setExcludes] = useState(() => new Set(initialExcludes || []))
+  // product-specific modifiers (rows being edited)
+  const [productMods, setProductMods] = useState(
+    () => (modifiers || [])
+      .filter(m => m.productId === product?.id && m.isActive)
+      .map(m => ({ id: m.id, localId: m.localId, name: m.name, priceDelta: String(m.priceDelta ?? 0) }))
+  )
+  // ids that were initially product-mods but were removed in the modal
+  const [removedModIds, setRemovedModIds] = useState([])
   const [productIngRows, setProductIngRows] = useState(
     existingProductIngredients?.length
       ? existingProductIngredients.map(r => ({
@@ -84,20 +101,67 @@ function ProductModal({ product, categories, ingredients, existingVariants, exis
   const updateProductIngRow = (idx, field, value) =>
     setProductIngRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
 
+  // ── Modifier helpers ────────────────────────────────────────────
+  const categoryModifiers = (modifiers || []).filter(
+    m => m.categoryId === Number(categoryId) && m.isActive
+  )
+
+  const toggleExclude = (modifierId) => {
+    setExcludes(prev => {
+      const next = new Set(prev)
+      if (next.has(modifierId)) next.delete(modifierId)
+      else next.add(modifierId)
+      return next
+    })
+  }
+
+  const addProductMod = () =>
+    setProductMods(prev => [...prev, { id: null, localId: null, name: '', priceDelta: '0' }])
+
+  const updateProductMod = (idx, field, value) =>
+    setProductMods(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m))
+
+  const removeProductMod = (idx) => {
+    setProductMods(prev => {
+      const row = prev[idx]
+      if (row?.id != null) setRemovedModIds(rm => [...rm, row.id])
+      return prev.filter((_, i) => i !== idx)
+    })
+  }
+
   const handleSave = () => {
     if (!name.trim() || !price) return
+    const productMatchExcludes = new Set(
+      [...excludes].filter(id => categoryModifiers.some(m => m.id === id))
+    )
     onSave({
       product: {
-        id:         product?.id ?? Date.now(),
-        name:       name.trim(),
-        price:      parseFloat(price),
-        stock:      product?.stock ?? 0,
-        categoryId: Number(categoryId),
-        imageUrl:   imageUrl || null,
-        recipe:     recipe.trim() || null,
+        id:          product?.id ?? Date.now(),
+        name:        name.trim(),
+        price:       parseFloat(price),
+        stock:       product?.stock ?? 0,
+        categoryId:  Number(categoryId),
+        imageUrl:    imageUrl || null,
+        recipe:      recipe.trim() || null,
+        pointsValue: Math.max(0, parseInt(pointsValue, 10) || 0),
       },
       variants,
       productIngRows,
+      productMods: productMods
+        .filter(m => m.name.trim())
+        .map(m => ({
+          id: m.id,
+          localId: m.localId,
+          name: m.name.trim(),
+          priceDelta: parseFloat(m.priceDelta) || 0,
+        })),
+      removedModIds,
+      excludes: Array.from(productMatchExcludes),
+      // record explicit "not excluded" set too — caller compares against
+      // initialExcludes to know which to delete from the table
+      includedCategoryModIds: categoryModifiers
+        .filter(m => !productMatchExcludes.has(m.id))
+        .map(m => m.id),
     })
   }
 
@@ -126,6 +190,21 @@ function ProductModal({ product, categories, ingredients, existingVariants, exis
             <div className="pm-field">
               <label className="pm-label">Fiyat (₺) <span className="pm-label__hint">— Varyant yoksa</span></label>
               <input className="pm-input" type="number" min="0" value={price} onChange={e => setPrice(e.target.value)} placeholder="0" />
+            </div>
+            <div className="pm-field">
+              <label className="pm-label">
+                San Lucas Puanı
+                <span className="pm-label__hint"> — Bu ürün her satıldığında müşteriye kazandırır</span>
+              </label>
+              <input
+                className="pm-input"
+                type="number"
+                min="0"
+                step="1"
+                value={pointsValue}
+                onChange={e => setPointsValue(e.target.value)}
+                placeholder="0"
+              />
             </div>
             <div className="pm-field">
               <label className="pm-label">Tarif (opsiyonel)</label>
@@ -272,6 +351,81 @@ function ProductModal({ product, categories, ingredients, existingVariants, exis
           </div>
         </div>
 
+        {/* ── Modifiers (priced extras) ── */}
+        <div className="pm-variants">
+          <div className="pm-variants__header">
+            <span className="pm-label">Ekstralar / Modifier</span>
+            <button type="button" className="pm-variants__add-btn" onClick={addProductMod}>
+              + Ürüne Özel Ekstra
+            </button>
+          </div>
+
+          {categoryModifiers.length > 0 && (
+            <>
+              <p className="pm-mod-help">
+                <strong>Kategori ekstraları</strong> — Bu üründe geçerli olmayanları kapatabilirsin.
+              </p>
+              <div className="pm-mod-cat-list">
+                {categoryModifiers.map(m => {
+                  const active = !excludes.has(m.id)
+                  return (
+                    <label key={m.id} className={`pm-mod-cat-item ${active ? '' : 'pm-mod-cat-item--off'}`}>
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        onChange={() => toggleExclude(m.id)}
+                      />
+                      <span className="pm-mod-cat-item__name">{m.name}</span>
+                      {Number(m.priceDelta) !== 0 && (
+                        <span className="pm-mod-cat-item__delta">
+                          {Number(m.priceDelta) > 0 ? '+' : '–'}₺{Math.abs(Number(m.priceDelta)).toLocaleString('tr-TR')}
+                        </span>
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
+            </>
+          )}
+
+          {productMods.length > 0 && (
+            <>
+              <p className="pm-mod-help" style={{ marginTop: 12 }}>
+                <strong>Bu ürüne özel ekstralar</strong>
+              </p>
+              <div className="pm-mod-rows">
+                {productMods.map((m, idx) => (
+                  <div key={idx} className="pm-mod-row">
+                    <input
+                      className="pm-input pm-mod-row__name"
+                      placeholder="Ekstra adı"
+                      value={m.name}
+                      onChange={e => updateProductMod(idx, 'name', e.target.value)}
+                    />
+                    <div className="pm-mod-row__price-wrap">
+                      <span className="pm-mod-row__price-prefix">₺</span>
+                      <input
+                        className="pm-input pm-mod-row__price"
+                        type="number"
+                        step="0.01"
+                        value={m.priceDelta}
+                        onChange={e => updateProductMod(idx, 'priceDelta', e.target.value)}
+                      />
+                    </div>
+                    <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductMod(idx)}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {categoryModifiers.length === 0 && productMods.length === 0 && (
+            <p className="pm-variants__empty">
+              Bu kategoride tanımlı ekstra yok. Ayarlar → Kategori Ekstraları'ndan ekleyebilir, ya da yukarıdaki butonla bu ürüne özel ekstra ekleyebilirsiniz.
+            </p>
+          )}
+        </div>
+
         <div className="modal__footer">
           <button className="btn btn--secondary" onClick={onClose}>İptal</button>
           <button className="btn btn--primary" onClick={handleSave} disabled={!name.trim() || !price}>Kaydet</button>
@@ -343,13 +497,18 @@ function ProductDetailModal({ product, category, variants, onClose }) {
 
 // ── Main Products page ────────────────────────────────────────────
 function Products() {
-  const { categories, products, productVariants, productIngredients, ingredients, saveProduct, removeProduct, saveVariants, saveProductIngredients } = useApp()
+  const {
+    categories, products, productVariants, productIngredients, ingredients,
+    saveProduct, removeProduct, saveVariants, saveProductIngredients,
+    modifiers, saveModifier, removeModifier, setModifierExcluded, productModifierExcludes,
+  } = useApp()
 
   const [activeCatId, setActiveCatId] = useState(null)
   const [search,      setSearch]      = useState('')
   const [editProduct, setEditProduct] = useState(undefined) // undefined=closed, null=new, obj=edit
   const [viewProduct, setViewProduct] = useState(null)      // null=closed, obj=view
   const [hoveredId,   setHoveredId]   = useState(null)
+  const [confirmDel,  setConfirmDel]  = useState(null) // product object
 
   const filtered = products.filter(p => {
     const matchCat    = activeCatId === null || p.categoryId === activeCatId
@@ -359,15 +518,53 @@ function Products() {
 
   const getCategoryForProduct = (catId) => categories.find(c => c.id === catId)
 
-  const handleSave = async ({ product, variants, productIngRows }) => {
+  const handleSave = async ({ product, variants, productIngRows, productMods, removedModIds, excludes }) => {
     await saveProduct(product)
     await saveVariants(product.id, variants)
     await saveProductIngredients(product.id, productIngRows)
+
+    // Persist per-product modifiers: insert/update kept rows, delete removed.
+    for (const m of (productMods || [])) {
+      await saveModifier({
+        id: m.id ?? undefined,
+        localId: m.localId,
+        categoryId: null,
+        productId: product.id,
+        name: m.name,
+        priceDelta: m.priceDelta,
+        sortOrder: 0,
+        isActive: true,
+      })
+    }
+    for (const id of (removedModIds || [])) {
+      await removeModifier(id)
+    }
+
+    // Sync category-modifier excludes: write the truth from the modal —
+    // anything in `excludes` is excluded, anything not is included.
+    const categoryModIds = modifiers
+      .filter(m => m.categoryId === product.categoryId && m.isActive)
+      .map(m => m.id)
+    const excludeSet = new Set(excludes || [])
+    for (const modifierId of categoryModIds) {
+      await setModifierExcluded(product.id, modifierId, excludeSet.has(modifierId))
+    }
+
     setEditProduct(undefined)
   }
 
-  const handleDelete = async (id) => {
-    await removeProduct(id)
+  const handleDelete = (id) => {
+    const p = products.find(x => x.id === id)
+    setConfirmDel(p ?? { id, name: 'Ürün' })
+  }
+
+  const confirmDeleteAction = async () => {
+    if (!confirmDel) return
+    try {
+      await removeProduct(confirmDel.id)
+    } finally {
+      setConfirmDel(null)
+    }
   }
 
   return (
@@ -461,9 +658,16 @@ function Products() {
                   </span>
                 )}
                 <p className="product-card__price">{priceLabel}</p>
-                {variants.length > 0 && (
-                  <span className="product-card__variants-badge">{variants.length} varyant</span>
-                )}
+                <div className="product-card__meta">
+                  {variants.length > 0 && (
+                    <span className="product-card__variants-badge">{variants.length} varyant</span>
+                  )}
+                  {product.pointsValue > 0 && (
+                    <span className="product-card__points-badge" title="San Lucas Puanı">
+                      ★ {product.pointsValue}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Hover actions */}
@@ -513,10 +717,21 @@ function Products() {
           ingredients={ingredients}
           existingVariants={editProduct ? (productVariants[editProduct.id] ?? []) : []}
           existingProductIngredients={editProduct ? (productIngredients[editProduct.id] ?? []) : []}
+          modifiers={modifiers}
+          initialExcludes={editProduct ? productModifierExcludes(editProduct.id) : []}
           onSave={handleSave}
           onClose={() => setEditProduct(undefined)}
         />
       )}
+
+      <ConfirmModal
+        open={!!confirmDel}
+        title="Ürünü Sil"
+        message={confirmDel ? `"${confirmDel.name}" ürününü silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.` : ''}
+        confirmText="Sil"
+        onConfirm={confirmDeleteAction}
+        onCancel={() => setConfirmDel(null)}
+      />
     </div>
   )
 }

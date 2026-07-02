@@ -77,8 +77,35 @@ const SCHEMA = `
     name       TEXT    NOT NULL,
     quantity   INTEGER NOT NULL,
     unit_price REAL    NOT NULL,
+    note       TEXT,
+    added_at   TEXT,
     is_synced  INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (order_id) REFERENCES orders(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS payments (
+    id              INTEGER PRIMARY KEY,
+    local_id        TEXT    UNIQUE NOT NULL,
+    order_id        INTEGER NOT NULL,
+    amount          REAL    NOT NULL,
+    payment_method  TEXT    NOT NULL,
+    payer_label     TEXT,
+    processed_by    TEXT,
+    device          TEXT    NOT NULL DEFAULT 'desktop',
+    is_synced       INTEGER NOT NULL DEFAULT 0,
+    remote_id       TEXT,
+    created_at      TEXT    NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS payment_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    payment_id    INTEGER NOT NULL,
+    order_item_id INTEGER NOT NULL,
+    is_synced     INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (order_item_id),
+    FOREIGN KEY (payment_id)    REFERENCES payments(id)    ON DELETE CASCADE,
+    FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS pending_deletes (
@@ -133,6 +160,44 @@ const SCHEMA = `
     password TEXT    NOT NULL,
     role     TEXT    NOT NULL DEFAULT 'admin'
   );
+
+  CREATE TABLE IF NOT EXISTS modifiers (
+    id          INTEGER PRIMARY KEY,
+    local_id    TEXT    UNIQUE NOT NULL,
+    category_id INTEGER,
+    product_id  INTEGER,
+    name        TEXT    NOT NULL,
+    price_delta REAL    NOT NULL DEFAULT 0,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    is_synced   INTEGER NOT NULL DEFAULT 0,
+    remote_id   TEXT,
+    CHECK ((category_id IS NULL) <> (product_id IS NULL)),
+    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id)  REFERENCES products(id)   ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS product_modifier_excludes (
+    product_id  INTEGER NOT NULL,
+    modifier_id INTEGER NOT NULL,
+    is_synced   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (product_id, modifier_id),
+    FOREIGN KEY (product_id)  REFERENCES products(id)  ON DELETE CASCADE,
+    FOREIGN KEY (modifier_id) REFERENCES modifiers(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS order_item_modifiers (
+    id            INTEGER PRIMARY KEY,
+    local_id      TEXT    UNIQUE NOT NULL,
+    order_item_id INTEGER NOT NULL,
+    modifier_id   INTEGER,
+    name          TEXT    NOT NULL,
+    price_delta   REAL    NOT NULL,
+    quantity      INTEGER NOT NULL DEFAULT 1,
+    is_synced     INTEGER NOT NULL DEFAULT 0,
+    remote_id     TEXT,
+    FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE CASCADE
+  );
 `
 
 // ── Init ──────────────────────────────────────────────────────────
@@ -185,6 +250,7 @@ export async function initDb() {
     `ALTER TABLE staff ADD COLUMN contact TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE staff ADD COLUMN email TEXT`,
     `ALTER TABLE staff ADD COLUMN supabase_uid TEXT`,
+    `ALTER TABLE categories ADD COLUMN image_url TEXT`,
     `CREATE TABLE IF NOT EXISTS product_ingredients (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id    INTEGER NOT NULL,
@@ -193,6 +259,45 @@ export async function initDb() {
       FOREIGN KEY (product_id)    REFERENCES products(id)    ON DELETE CASCADE,
       FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
     )`,
+    // Per-item note + timestamp (parity with Supabase migration 2026-06-26)
+    `ALTER TABLE order_items ADD COLUMN note TEXT`,
+    `ALTER TABLE order_items ADD COLUMN added_at TEXT`,
+    // Mobile parity: active orders live in Supabase, status='active' on Windows too
+    // (existing rows default to 'completed' — no change needed)
+    // payments table — split payment support, mirrors Supabase
+    `CREATE TABLE IF NOT EXISTS payments (
+      id              INTEGER PRIMARY KEY,
+      local_id        TEXT    UNIQUE NOT NULL,
+      order_id        INTEGER NOT NULL,
+      amount          REAL    NOT NULL,
+      payment_method  TEXT    NOT NULL,
+      payer_label     TEXT,
+      processed_by    TEXT,
+      device          TEXT    NOT NULL DEFAULT 'desktop',
+      is_synced       INTEGER NOT NULL DEFAULT 0,
+      remote_id       TEXT,
+      created_at      TEXT    NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES orders(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS payment_items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id    INTEGER NOT NULL,
+      order_item_id INTEGER NOT NULL,
+      is_synced     INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (order_item_id),
+      FOREIGN KEY (payment_id)    REFERENCES payments(id)    ON DELETE CASCADE,
+      FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_order_id        ON payments(order_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payment_items_payment_id ON payment_items(payment_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_order_items_order_id     ON order_items(order_id)`,
+    `ALTER TABLE order_items ADD COLUMN remote_id TEXT`,
+    `ALTER TABLE products ADD COLUMN points_value INTEGER NOT NULL DEFAULT 0`,
+    // Modifiers (cafe owner defines per-category/per-product priced extras)
+    `CREATE INDEX IF NOT EXISTS idx_modifiers_category_id          ON modifiers(category_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_modifiers_product_id           ON modifiers(product_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_pmod_excludes_product_id       ON product_modifier_excludes(product_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_order_item_modifiers_item_id   ON order_item_modifiers(order_item_id)`,
   ]
   for (const sql of migrations) {
     try { db.run(sql) } catch { /* column already exists — ignore */ }
@@ -267,30 +372,30 @@ export async function deleteTableDef(id) {
 // ── categories (LOCAL + SUPABASE) ────────────────────────────────
 export function getAllCategories() {
   requireDb()
-  const res = db.exec('SELECT id, name, color, icon, is_synced, remote_id FROM categories ORDER BY id')
+  const res = db.exec('SELECT id, name, color, icon, is_synced, remote_id, image_url FROM categories ORDER BY id')
   if (!res.length) return []
-  return res[0].values.map(([id, name, color, icon, is_synced, remote_id]) => ({
-    id, name, color, icon, is_synced: !!is_synced, remote_id,
+  return res[0].values.map(([id, name, color, icon, is_synced, remote_id, image_url]) => ({
+    id, name, color, icon, is_synced: !!is_synced, remote_id, imageUrl: image_url ?? null,
   }))
 }
 
-export async function insertCategory({ name, color, icon = 'tag' }) {
+export async function insertCategory({ name, color, icon = 'tag', imageUrl = null }) {
   requireDb()
   const id = Date.now()
   db.run(
-    'INSERT INTO categories (id, name, color, icon, is_synced) VALUES (?, ?, ?, ?, 0)',
-    [id, name, color, icon]
+    'INSERT INTO categories (id, name, color, icon, image_url, is_synced) VALUES (?, ?, ?, ?, ?, 0)',
+    [id, name, color, icon, imageUrl]
   )
   await persistDb()
-  return { id, name, color, icon, is_synced: false }
+  return { id, name, color, icon, imageUrl, is_synced: false }
 }
 
 export async function updateCategory(id, fields) {
   requireDb()
-  const { name, color, icon } = fields
+  const { name, color, icon, imageUrl = null } = fields
   db.run(
-    'UPDATE categories SET name = ?, color = ?, icon = ?, is_synced = 0 WHERE id = ?',
-    [name, color, icon, id]
+    'UPDATE categories SET name = ?, color = ?, icon = ?, image_url = ?, is_synced = 0 WHERE id = ?',
+    [name, color, icon, imageUrl, id]
   )
   await persistDb()
 }
@@ -316,27 +421,27 @@ export async function deleteCategory(id) {
 export function getAllProducts() {
   requireDb()
   const res = db.exec(
-    'SELECT id, name, price, stock, category_id, image_url, recipe, is_synced, remote_id FROM products ORDER BY id'
+    'SELECT id, name, price, stock, category_id, image_url, recipe, points_value, is_synced, remote_id FROM products ORDER BY id'
   )
   if (!res.length) return []
-  return res[0].values.map(([id, name, price, stock, category_id, image_url, recipe, is_synced, remote_id]) => ({
+  return res[0].values.map(([id, name, price, stock, category_id, image_url, recipe, points_value, is_synced, remote_id]) => ({
     id, name, price, stock, categoryId: category_id, imageUrl: image_url ?? null,
-    recipe: recipe ?? null, is_synced: !!is_synced, remote_id,
+    recipe: recipe ?? null, pointsValue: points_value ?? 0, is_synced: !!is_synced, remote_id,
   }))
 }
 
-export async function upsertProduct({ id, name, price, stock, categoryId, imageUrl = null, recipe = null }) {
+export async function upsertProduct({ id, name, price, stock, categoryId, imageUrl = null, recipe = null, pointsValue = 0 }) {
   requireDb()
   const existing = db.exec('SELECT id FROM products WHERE id = ?', [id])
   if (existing.length && existing[0].values.length) {
     db.run(
-      'UPDATE products SET name = ?, price = ?, stock = ?, category_id = ?, image_url = ?, recipe = ?, is_synced = 0 WHERE id = ?',
-      [name, price, stock, categoryId, imageUrl, recipe, id]
+      'UPDATE products SET name = ?, price = ?, stock = ?, category_id = ?, image_url = ?, recipe = ?, points_value = ?, is_synced = 0 WHERE id = ?',
+      [name, price, stock, categoryId, imageUrl, recipe, pointsValue, id]
     )
   } else {
     db.run(
-      'INSERT INTO products (id, name, price, stock, category_id, image_url, recipe, is_synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
-      [id, name, price, stock, categoryId, imageUrl, recipe]
+      'INSERT INTO products (id, name, price, stock, category_id, image_url, recipe, points_value, is_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+      [id, name, price, stock, categoryId, imageUrl, recipe, pointsValue]
     )
   }
   await persistDb()
@@ -591,6 +696,203 @@ export function getAllProductIngredientsAll() {
   return map
 }
 
+// ── modifiers (LOCAL + SUPABASE) ──────────────────────────────────
+// A modifier is either category-scoped (applies to every product in the
+// category) or product-scoped (applies only to one product). The owner
+// defines them in Settings (category) or in the product edit modal.
+// product_modifier_excludes lets a single product opt out of an inherited
+// category modifier (e.g., this espresso has no "süt seçimi").
+
+export function getAllModifiers() {
+  requireDb()
+  const res = db.exec(
+    `SELECT id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced, remote_id
+     FROM modifiers
+     ORDER BY COALESCE(category_id, 0), COALESCE(product_id, 0), sort_order, id`
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced, remote_id]) => ({
+    id,
+    localId: local_id,
+    categoryId: category_id ?? null,
+    productId: product_id ?? null,
+    name,
+    priceDelta: Number(price_delta) || 0,
+    sortOrder: sort_order ?? 0,
+    isActive: !!is_active,
+    is_synced: !!is_synced,
+    remote_id: remote_id ?? null,
+  }))
+}
+
+export function getModifiersForCategory(categoryId) {
+  return getAllModifiers().filter(m => m.categoryId === categoryId && m.isActive)
+}
+
+// Returns category-inherited modifiers (minus excluded) + product-specific modifiers,
+// shaped for the order-add UI. Each entry: { id, name, priceDelta, source: 'category'|'product', sortOrder }
+export function getEffectiveModifiersForProduct(productId, categoryId) {
+  requireDb()
+  const all = getAllModifiers()
+  const excluded = new Set()
+  const exRes = db.exec('SELECT modifier_id FROM product_modifier_excludes WHERE product_id = ?', [productId])
+  if (exRes.length) {
+    for (const [mid] of exRes[0].values) excluded.add(mid)
+  }
+  const result = []
+  for (const m of all) {
+    if (!m.isActive) continue
+    if (m.categoryId != null && m.categoryId === categoryId && !excluded.has(m.id)) {
+      result.push({ ...m, source: 'category' })
+    } else if (m.productId != null && m.productId === productId) {
+      result.push({ ...m, source: 'product' })
+    }
+  }
+  result.sort((a, b) => (a.sortOrder - b.sortOrder) || (a.id - b.id))
+  return result
+}
+
+export async function upsertModifier({ id, localId, categoryId = null, productId = null, name, priceDelta = 0, sortOrder = 0, isActive = true }) {
+  requireDb()
+  if ((categoryId == null) === (productId == null)) {
+    throw new Error('[localDb.upsertModifier] exactly one of categoryId/productId must be set')
+  }
+  const lid = localId || crypto.randomUUID()
+  if (id) {
+    db.run(
+      `UPDATE modifiers
+       SET category_id = ?, product_id = ?, name = ?, price_delta = ?, sort_order = ?, is_active = ?, is_synced = 0
+       WHERE id = ?`,
+      [categoryId, productId, name, Number(priceDelta) || 0, sortOrder, isActive ? 1 : 0, id]
+    )
+    await persistDb()
+    return id
+  }
+  const newId = Date.now() + (Math.random() * 1000 | 0)
+  db.run(
+    `INSERT INTO modifiers (id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    [newId, lid, categoryId, productId, name, Number(priceDelta) || 0, sortOrder, isActive ? 1 : 0]
+  )
+  await persistDb()
+  return newId
+}
+
+export async function deleteModifier(id) {
+  requireDb()
+  const res = db.exec('SELECT remote_id FROM modifiers WHERE id = ?', [id])
+  const remoteId = res[0]?.values[0]?.[0]
+  db.run('DELETE FROM modifiers WHERE id = ?', [id])
+  if (remoteId) {
+    db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('modifier', ?)", [remoteId])
+  }
+  await persistDb()
+}
+
+export function getProductModifierExcludes(productId) {
+  requireDb()
+  const res = db.exec('SELECT modifier_id FROM product_modifier_excludes WHERE product_id = ?', [productId])
+  if (!res.length) return []
+  return res[0].values.map(([mid]) => mid)
+}
+
+export async function setProductModifierExclude(productId, modifierId, excluded) {
+  requireDb()
+  if (excluded) {
+    db.run(
+      'INSERT OR IGNORE INTO product_modifier_excludes (product_id, modifier_id, is_synced) VALUES (?, ?, 0)',
+      [productId, modifierId]
+    )
+  } else {
+    db.run(
+      'DELETE FROM product_modifier_excludes WHERE product_id = ? AND modifier_id = ?',
+      [productId, modifierId]
+    )
+  }
+  await persistDb()
+}
+
+// ── order_item_modifiers ──────────────────────────────────────────
+// Attached to a saved order_items row. Snapshots name + price_delta so
+// historical orders stay correct even if the modifier catalog changes.
+
+export async function insertOrderItemModifiers(orderItemId, modifiers) {
+  requireDb()
+  if (!modifiers || !modifiers.length) return
+  for (const m of modifiers) {
+    const qty = Math.max(1, Number(m.quantity) || 1)
+    db.run(
+      `INSERT INTO order_item_modifiers
+         (local_id, order_item_id, modifier_id, name, price_delta, quantity, is_synced)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      [
+        crypto.randomUUID(),
+        orderItemId,
+        m.modifierId ?? m.id ?? null,
+        m.name,
+        Number(m.priceDelta) || 0,
+        qty,
+      ]
+    )
+  }
+  await persistDb()
+}
+
+export function getOrderItemModifiers(orderItemId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT id, local_id, modifier_id, name, price_delta, quantity, is_synced, remote_id
+     FROM order_item_modifiers
+     WHERE order_item_id = ?
+     ORDER BY id`,
+    [orderItemId]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, local_id, modifier_id, name, price_delta, quantity, is_synced, remote_id]) => ({
+    id,
+    localId: local_id,
+    modifierId: modifier_id ?? null,
+    name,
+    priceDelta: Number(price_delta) || 0,
+    quantity: Number(quantity) || 1,
+    is_synced: !!is_synced,
+    remote_id: remote_id ?? null,
+  }))
+}
+
+export function getModifiersForOrderItems(orderItemIds) {
+  requireDb()
+  if (!orderItemIds?.length) return {}
+  const placeholders = orderItemIds.map(() => '?').join(',')
+  const res = db.exec(
+    `SELECT order_item_id, id, local_id, modifier_id, name, price_delta, quantity
+     FROM order_item_modifiers
+     WHERE order_item_id IN (${placeholders})
+     ORDER BY id`,
+    orderItemIds
+  )
+  if (!res.length) return {}
+  const map = {}
+  for (const [orderItemId, id, local_id, modifier_id, name, price_delta, quantity] of res[0].values) {
+    if (!map[orderItemId]) map[orderItemId] = []
+    map[orderItemId].push({
+      id,
+      localId: local_id,
+      modifierId: modifier_id ?? null,
+      name,
+      priceDelta: Number(price_delta) || 0,
+      quantity: Number(quantity) || 1,
+    })
+  }
+  return map
+}
+
+export async function deleteOrderItemModifiers(orderItemId) {
+  requireDb()
+  db.run('DELETE FROM order_item_modifiers WHERE order_item_id = ?', [orderItemId])
+  await persistDb()
+}
+
 // ── orders / order_items ──────────────────────────────────────────
 
 export async function saveCompletedOrder(txData) {
@@ -636,11 +938,13 @@ export async function saveCompletedOrder(txData) {
   )
 
   for (const item of (txData.items ?? [])) {
+    const itemId = Date.now() + (Math.random() * 1000 | 0)
     db.run(
       `INSERT INTO order_items
-         (local_id, order_id, product_id, variant_id, name, quantity, unit_price, is_synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+         (id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, is_synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
+        itemId,
         crypto.randomUUID(),
         orderId,
         item.productId ?? item.id ?? null,
@@ -650,6 +954,23 @@ export async function saveCompletedOrder(txData) {
         item.unitPrice,
       ]
     )
+    if (item.modifiers && item.modifiers.length) {
+      for (const m of item.modifiers) {
+        db.run(
+          `INSERT INTO order_item_modifiers
+             (local_id, order_item_id, modifier_id, name, price_delta, quantity, is_synced)
+           VALUES (?, ?, ?, ?, ?, ?, 0)`,
+          [
+            crypto.randomUUID(),
+            itemId,
+            m.modifierId ?? m.id ?? null,
+            m.name,
+            Number(m.priceDelta) || 0,
+            Math.max(1, Number(m.quantity) || 1),
+          ]
+        )
+      }
+    }
   }
 
   const lowStockWarnings = consumeIngredients(txData.items ?? [])
@@ -670,20 +991,20 @@ export function getDailyRevenue() {
 
 // ── Pull helpers (used by sync.js to write Supabase data into localDb) ───────
 
-export async function upsertCategoryFromRemote({ remoteId, name, color, icon }) {
+export async function upsertCategoryFromRemote({ remoteId, name, color, icon, imageUrl }) {
   requireDb()
   const existing = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteId)])
   if (existing.length && existing[0].values.length) {
     const localId = existing[0].values[0][0]
     db.run(
-      'UPDATE categories SET name=?, color=?, icon=?, is_synced=1 WHERE id=?',
-      [name, color, icon ?? 'tag', localId]
+      'UPDATE categories SET name=?, color=?, icon=?, image_url=?, is_synced=1 WHERE id=?',
+      [name, color, icon ?? 'tag', imageUrl ?? null, localId]
     )
   } else {
     const localId = Date.now() + (Math.random() * 1000 | 0)
     db.run(
-      'INSERT OR IGNORE INTO categories (id, name, color, icon, is_synced, remote_id) VALUES (?,?,?,?,1,?)',
-      [localId, name, color, icon ?? 'tag', String(remoteId)]
+      'INSERT OR IGNORE INTO categories (id, name, color, icon, image_url, is_synced, remote_id) VALUES (?,?,?,?,?,1,?)',
+      [localId, name, color, icon ?? 'tag', imageUrl ?? null, String(remoteId)]
     )
   }
 }
@@ -708,7 +1029,64 @@ export async function upsertIngredientFromRemote({ remoteId, name, unit, stockAm
   }
 }
 
-export async function upsertProductFromRemote({ remoteId, name, price, stock, remoteCatId, imageUrl }) {
+// Insert/update a modifier coming from Supabase. Resolves remote
+// category/product ids back to local ids; if the parent isn't pulled
+// yet we skip — the next sync pass will pick it up.
+export async function upsertModifierFromRemote({ remoteId, remoteCategoryId, remoteProductId, name, priceDelta, sortOrder, isActive }) {
+  requireDb()
+  let localCatId = null
+  let localProdId = null
+  if (remoteCategoryId != null) {
+    const r = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteCategoryId)])
+    localCatId = r.length && r[0].values.length ? r[0].values[0][0] : null
+    if (localCatId == null) return false
+  }
+  if (remoteProductId != null) {
+    const r = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteProductId)])
+    localProdId = r.length && r[0].values.length ? r[0].values[0][0] : null
+    if (localProdId == null) return false
+  }
+
+  const existing = db.exec('SELECT id FROM modifiers WHERE remote_id = ?', [String(remoteId)])
+  if (existing.length && existing[0].values.length) {
+    const localId = existing[0].values[0][0]
+    db.run(
+      `UPDATE modifiers
+       SET category_id = ?, product_id = ?, name = ?, price_delta = ?, sort_order = ?, is_active = ?, is_synced = 1
+       WHERE id = ?`,
+      [localCatId, localProdId, name, Number(priceDelta) || 0, sortOrder ?? 0, isActive ? 1 : 0, localId]
+    )
+  } else {
+    const localId = Date.now() + (Math.random() * 1000 | 0)
+    db.run(
+      `INSERT OR IGNORE INTO modifiers
+         (id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced, remote_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [localId, crypto.randomUUID(), localCatId, localProdId,
+       name, Number(priceDelta) || 0, sortOrder ?? 0, isActive ? 1 : 0, String(remoteId)]
+    )
+  }
+  return true
+}
+
+export async function upsertProductModifierExcludeFromRemote({ remoteProductId, remoteModifierId }) {
+  requireDb()
+  const pr = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteProductId)])
+  const mr = db.exec('SELECT id FROM modifiers WHERE remote_id = ?', [String(remoteModifierId)])
+  const localProd = pr.length && pr[0].values.length ? pr[0].values[0][0] : null
+  const localMod  = mr.length && mr[0].values.length ? mr[0].values[0][0] : null
+  if (localProd == null || localMod == null) return false
+  db.run(
+    'INSERT OR IGNORE INTO product_modifier_excludes (product_id, modifier_id, is_synced) VALUES (?, ?, 1)',
+    [localProd, localMod]
+  )
+  // Mark existing rows synced (in case they were inserted offline first)
+  db.run('UPDATE product_modifier_excludes SET is_synced = 1 WHERE product_id = ? AND modifier_id = ?',
+    [localProd, localMod])
+  return true
+}
+
+export async function upsertProductFromRemote({ remoteId, name, price, stock, remoteCatId, imageUrl, pointsValue = 0 }) {
   requireDb()
   // Resolve local category id from its remote_id
   const catRes = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteCatId)])
@@ -718,27 +1096,27 @@ export async function upsertProductFromRemote({ remoteId, name, price, stock, re
   if (existing.length && existing[0].values.length) {
     const localId = existing[0].values[0][0]
     db.run(
-      'UPDATE products SET name=?, price=?, stock=?, category_id=?, image_url=?, is_synced=1 WHERE id=?',
-      [name, price, stock, localCatId, imageUrl ?? null, localId]
+      'UPDATE products SET name=?, price=?, stock=?, category_id=?, image_url=?, points_value=?, is_synced=1 WHERE id=?',
+      [name, price, stock, localCatId, imageUrl ?? null, pointsValue ?? 0, localId]
     )
   } else {
     const localId = Date.now() + (Math.random() * 1000 | 0)
     db.run(
-      'INSERT OR IGNORE INTO products (id, name, price, stock, category_id, image_url, is_synced, remote_id) VALUES (?,?,?,?,?,?,1,?)',
-      [localId, name, price, stock, localCatId, imageUrl ?? null, String(remoteId)]
+      'INSERT OR IGNORE INTO products (id, name, price, stock, category_id, image_url, points_value, is_synced, remote_id) VALUES (?,?,?,?,?,?,?,1,?)',
+      [localId, name, price, stock, localCatId, imageUrl ?? null, pointsValue ?? 0, String(remoteId)]
     )
   }
 }
 
 // ── Sync helpers (used by sync.js) ────────────────────────────────
 export function getUnsyncedCategories() {
-  const res = db.exec('SELECT * FROM categories WHERE is_synced = 0')
+  const res = db.exec('SELECT id, name, color, icon, image_url FROM categories WHERE is_synced = 0')
   return res.length ? res[0].values : []
 }
 
 export function getUnsyncedProducts() {
   const res = db.exec(
-    'SELECT id, name, price, stock, category_id, image_url, recipe FROM products WHERE is_synced = 0'
+    'SELECT id, name, price, stock, category_id, image_url, recipe, points_value, remote_id FROM products WHERE is_synced = 0'
   )
   return res.length ? res[0].values : []
 }
@@ -786,7 +1164,7 @@ export function getUnsyncedOrderItems() {
   const res = db.exec(
     `SELECT oi.id, oi.local_id, o.remote_id as order_remote_id,
             oi.quantity, oi.unit_price, p.remote_id as product_remote_id,
-            pv.remote_id as variant_remote_id
+            pv.remote_id as variant_remote_id, oi.note, oi.added_at
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
      LEFT JOIN products p ON p.id = oi.product_id
@@ -812,6 +1190,70 @@ export function getPendingDeletes() {
   return res[0].values.map(([id, entity_type, remote_id]) => ({ id, entity_type, remote_id }))
 }
 
+// ── Modifier sync helpers ─────────────────────────────────────────
+// A modifier may have either category_id OR product_id; we resolve the
+// corresponding remote_id at push time so the row is FK-correct.
+export function getUnsyncedModifiers() {
+  requireDb()
+  const res = db.exec(
+    `SELECT m.id, m.local_id, m.category_id, m.product_id, m.name, m.price_delta,
+            m.sort_order, m.is_active, m.remote_id,
+            c.remote_id as category_remote_id,
+            p.remote_id as product_remote_id
+     FROM modifiers m
+     LEFT JOIN categories c ON c.id = m.category_id
+     LEFT JOIN products   p ON p.id = m.product_id
+     WHERE m.is_synced = 0`
+  )
+  return res.length ? res[0].values : []
+}
+
+export async function markModifierSynced(id, remoteId) {
+  db.run('UPDATE modifiers SET is_synced = 1, remote_id = ? WHERE id = ?', [String(remoteId), id])
+  await persistDb()
+}
+
+export function getUnsyncedProductModifierExcludes() {
+  requireDb()
+  const res = db.exec(
+    `SELECT pme.product_id, pme.modifier_id,
+            p.remote_id as product_remote_id,
+            m.remote_id as modifier_remote_id
+     FROM product_modifier_excludes pme
+     LEFT JOIN products  p ON p.id = pme.product_id
+     LEFT JOIN modifiers m ON m.id = pme.modifier_id
+     WHERE pme.is_synced = 0`
+  )
+  return res.length ? res[0].values : []
+}
+
+export async function markProductModifierExcludeSynced(productId, modifierId) {
+  db.run(
+    'UPDATE product_modifier_excludes SET is_synced = 1 WHERE product_id = ? AND modifier_id = ?',
+    [productId, modifierId]
+  )
+  await persistDb()
+}
+
+export function getUnsyncedOrderItemModifiers() {
+  requireDb()
+  const res = db.exec(
+    `SELECT oim.id, oim.local_id, oi.remote_id as order_item_remote_id,
+            m.remote_id as modifier_remote_id,
+            oim.name, oim.price_delta, oim.quantity
+     FROM order_item_modifiers oim
+     JOIN order_items oi  ON oi.id = oim.order_item_id
+     LEFT JOIN modifiers m ON m.id = oim.modifier_id
+     WHERE oim.is_synced = 0`
+  )
+  return res.length ? res[0].values : []
+}
+
+export async function markOrderItemModifierSynced(id, remoteId) {
+  db.run('UPDATE order_item_modifiers SET is_synced = 1, remote_id = ? WHERE id = ?', [String(remoteId), id])
+  await persistDb()
+}
+
 export async function clearPendingDelete(id) {
   db.run('DELETE FROM pending_deletes WHERE id = ?', [id])
   await persistDb()
@@ -832,9 +1274,12 @@ export function getUnsyncedCount() {
   if (!db) return 0
   const res = db.exec(`
     SELECT
-      (SELECT COUNT(*) FROM categories  WHERE is_synced = 0) +
-      (SELECT COUNT(*) FROM products    WHERE is_synced = 0) +
-      (SELECT COUNT(*) FROM orders      WHERE is_synced = 0)
+      (SELECT COUNT(*) FROM categories               WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM products                 WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM orders                   WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM modifiers                WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM product_modifier_excludes WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM order_item_modifiers     WHERE is_synced = 0)
     AS total
   `)
   return res[0]?.values[0][0] ?? 0
@@ -1192,19 +1637,62 @@ export function getOrdersList(startIso, endIso) {
     params
   )
   if (!res.length || !res[0].values.length) return []
-  return res[0].values.map(([id, closedAt, tableName, paymentMethod, total, waiterName, itemsSummary]) => ({
-    id, closedAt, tableName, paymentMethod, total, waiterName: waiterName || null, itemsSummary: itemsSummary || '',
+  const orders = res[0].values.map(([id, closedAt, tableName, paymentMethod, total, waiterName, itemsSummary]) => ({
+    id, closedAt, tableName, paymentMethod, total,
+    waiterName: waiterName || null,
+    itemsSummary: itemsSummary || '',
+    items: [],
   }))
+
+  const orderIds = orders.map(o => o.id)
+  if (orderIds.length === 0) return orders
+
+  const itemsByOrder = {}
+  const allItemIds = []
+  const placeholders = orderIds.map(() => '?').join(',')
+  const itemsRes = db.exec(
+    `SELECT id, order_id, name, quantity, unit_price
+     FROM order_items
+     WHERE order_id IN (${placeholders})
+     ORDER BY id`,
+    orderIds
+  )
+  if (itemsRes.length && itemsRes[0].values.length) {
+    for (const [iid, oid, name, qty, unitPrice] of itemsRes[0].values) {
+      if (!itemsByOrder[oid]) itemsByOrder[oid] = []
+      itemsByOrder[oid].push({ id: iid, name, qty, unitPrice, modifiers: [] })
+      allItemIds.push(iid)
+    }
+  }
+
+  const modsMap = getModifiersForOrderItems(allItemIds)
+  for (const items of Object.values(itemsByOrder)) {
+    for (const it of items) {
+      it.modifiers = modsMap[it.id] || []
+    }
+  }
+
+  for (const o of orders) {
+    o.items = itemsByOrder[o.id] || []
+  }
+  return orders
 }
 
 export function getOrderItems(orderId) {
   requireDb()
   const res = db.exec(
-    `SELECT name, quantity, unit_price FROM order_items WHERE order_id = ? ORDER BY id`,
+    `SELECT id, name, quantity, unit_price FROM order_items WHERE order_id = ? ORDER BY id`,
     [orderId]
   )
   if (!res.length || !res[0].values.length) return []
-  return res[0].values.map(([name, quantity, unitPrice]) => ({ name, quantity, unitPrice }))
+  const items = res[0].values.map(([id, name, quantity, unitPrice]) => ({
+    id, name, quantity, unitPrice, modifiers: [],
+  }))
+  const modsMap = getModifiersForOrderItems(items.map(i => i.id))
+  for (const it of items) {
+    it.modifiers = modsMap[it.id] || []
+  }
+  return items
 }
 
 // ── staff CRUD (LOCAL ONLY) ───────────────────────────────────────
@@ -1265,5 +1753,291 @@ export async function updateStaff({ id, name, role, contact = '', isActive, perm
 export async function deleteStaff(id) {
   requireDb()
   db.run('DELETE FROM staff WHERE id = ?', [id])
+  await persistDb()
+}
+
+// ── Active order / order items (parity with mobile) ───────────────
+// Active orders are kept in Supabase as the source of truth (mobile model).
+// Windows mirrors them locally for offline reads & sync queue.
+
+export async function upsertActiveOrderFromRemote(order) {
+  requireDb()
+  const existing = db.exec('SELECT id FROM orders WHERE remote_id = ?', [String(order.id)])
+  const total = Number(order.total || 0)
+  if (existing.length && existing[0].values.length) {
+    db.run(
+      `UPDATE orders SET status=?, payment_method=?, total=?, table_id=?, table_name=?,
+                         closed_at=?, waiter_name=?, is_synced=1 WHERE remote_id=?`,
+      [order.status, order.payment_method || '', total, order.table_id, order.table_name || '',
+       order.closed_at || '', order.waiter_name || null, String(order.id)]
+    )
+  } else {
+    const localId = Date.now() + (Math.random() * 1000 | 0)
+    db.run(
+      `INSERT OR IGNORE INTO orders
+        (id, local_id, table_id, table_name, status, payment_method, total,
+         is_synced, remote_id, created_at, closed_at, waiter_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+      [localId, order.local_id || crypto.randomUUID(), order.table_id,
+       order.table_name || '', order.status, order.payment_method || '',
+       total, String(order.id), order.created_at || new Date().toISOString(),
+       order.closed_at || '', order.waiter_name || null]
+    )
+  }
+}
+
+// ── payments (LOCAL + SUPABASE) ──────────────────────────────────
+
+export async function insertPayment({ localId, orderId, amount, paymentMethod, payerLabel, processedBy, device = 'desktop', createdAt }) {
+  requireDb()
+  const id = Date.now() + (Math.random() * 1000 | 0)
+  const now = createdAt || new Date().toISOString()
+  db.run(
+    `INSERT INTO payments
+       (id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, is_synced, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+    [id, localId || crypto.randomUUID(), orderId, Number(amount),
+     paymentMethod, payerLabel || null, processedBy || null, device, now]
+  )
+  await persistDb()
+  return id
+}
+
+export async function insertPaymentItems(paymentId, orderItemIds) {
+  requireDb()
+  if (!orderItemIds || orderItemIds.length === 0) return
+  for (const oid of orderItemIds) {
+    db.run(
+      `INSERT OR IGNORE INTO payment_items (payment_id, order_item_id, is_synced) VALUES (?, ?, 0)`,
+      [paymentId, oid]
+    )
+  }
+  await persistDb()
+}
+
+export function getOrderPayments(orderId) {
+  requireDb()
+  const pRes = db.exec(
+    `SELECT id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, created_at, remote_id
+     FROM payments WHERE order_id = ? ORDER BY created_at`,
+    [orderId]
+  )
+  if (!pRes.length) return []
+  const payments = pRes[0].values.map(([id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, created_at, remote_id]) => ({
+    id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, created_at, remote_id,
+    order_item_ids: [],
+  }))
+  const piRes = db.exec(
+    `SELECT payment_id, order_item_id FROM payment_items
+     WHERE payment_id IN (SELECT id FROM payments WHERE order_id = ?)`,
+    [orderId]
+  )
+  if (piRes.length) {
+    const byId = {}
+    payments.forEach(p => { byId[p.id] = p })
+    for (const [paymentId, orderItemId] of piRes[0].values) {
+      if (byId[paymentId]) byId[paymentId].order_item_ids.push(orderItemId)
+    }
+  }
+  return payments
+}
+
+export function getPaidItemIds(orderId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT pi.order_item_id
+     FROM payment_items pi
+     JOIN payments p ON p.id = pi.payment_id
+     WHERE p.order_id = ?`,
+    [orderId]
+  )
+  if (!res.length) return new Set()
+  return new Set(res[0].values.map(([id]) => id))
+}
+
+export function getOrderTotalPaid(orderId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT COALESCE(SUM(amount), 0) FROM payments WHERE order_id = ?`,
+    [orderId]
+  )
+  return Number(res[0]?.values[0][0] || 0)
+}
+
+// ── Active orders local CRUD (one active order per table) ─────────
+
+export async function insertActiveOrder({ tableId, tableName, waiterName, processedBy }) {
+  requireDb()
+  const id = Date.now() + (Math.random() * 1000 | 0)
+  const now = new Date().toISOString()
+  db.run(
+    `INSERT INTO orders
+       (id, local_id, table_id, table_name, status, payment_method, total,
+        is_synced, created_at, closed_at, waiter_name)
+     VALUES (?, ?, ?, ?, 'active', '', 0, 0, ?, '', ?)`,
+    [id, crypto.randomUUID(), tableId, tableName || '', now, waiterName || null]
+  )
+  await persistDb()
+  return id
+}
+
+export function getActiveOrderForTable(tableId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT id, local_id, table_id, table_name, status, payment_method, total,
+            is_synced, remote_id, created_at, waiter_name
+     FROM orders WHERE table_id = ? AND status = 'active' LIMIT 1`,
+    [tableId]
+  )
+  if (!res.length || !res[0].values.length) return null
+  const [id, local_id, table_id, table_name, status, payment_method, total, is_synced, remote_id, created_at, waiter_name] =
+    res[0].values[0]
+  return {
+    id, local_id, table_id, table_name, status, payment_method, total,
+    is_synced: !!is_synced, remote_id, created_at, waiter_name,
+    order_items: getOrderItemRows(id),
+  }
+}
+
+export function getOrderItemRows(orderId) {
+  requireDb()
+  const res = db.exec(
+    `SELECT id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced
+     FROM order_items WHERE order_id = ? ORDER BY COALESCE(added_at, ''), id`,
+    [orderId]
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced]) => ({
+    id, local_id, order_id, product_id, variant_id, name, quantity, unit_price,
+    note: note || null, added_at: added_at || null, is_synced: !!is_synced,
+  }))
+}
+
+export async function insertOrderItem({ orderId, productId, variantId, name, unitPrice, note, modifiers }) {
+  requireDb()
+  const id = Date.now() + (Math.random() * 1000 | 0)
+  const now = new Date().toISOString()
+  db.run(
+    `INSERT INTO order_items
+       (id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0)`,
+    [id, crypto.randomUUID(), orderId, productId || null, variantId || null,
+     name, Number(unitPrice), note || null, now]
+  )
+  if (modifiers && modifiers.length) {
+    await insertOrderItemModifiers(id, modifiers)
+  } else {
+    await persistDb()
+  }
+  return id
+}
+
+export async function updateOrderItemNote(itemId, note) {
+  requireDb()
+  db.run('UPDATE order_items SET note = ?, is_synced = 0 WHERE id = ?', [note || null, itemId])
+  await persistDb()
+}
+
+export async function deleteOrderItemRow(itemId) {
+  requireDb()
+  // Track delete for sync if it has a remote_id (via order remote)
+  db.run('DELETE FROM order_items WHERE id = ?', [itemId])
+  await persistDb()
+}
+
+export async function updateOrderTotal(orderId, total) {
+  requireDb()
+  db.run('UPDATE orders SET total = ?, is_synced = 0 WHERE id = ?', [Number(total), orderId])
+  await persistDb()
+}
+
+export async function setOrderStatus(orderId, status, extra = {}) {
+  requireDb()
+  const closedAt = extra.closedAt ?? (status === 'completed' || status === 'cancelled' ? new Date().toISOString() : null)
+  const paymentMethod = extra.paymentMethod ?? null
+  if (paymentMethod !== null) {
+    db.run(
+      `UPDATE orders SET status = ?, payment_method = ?, closed_at = ?, is_synced = 0 WHERE id = ?`,
+      [status, paymentMethod, closedAt || '', orderId]
+    )
+  } else {
+    db.run(
+      `UPDATE orders SET status = ?, closed_at = ?, is_synced = 0 WHERE id = ?`,
+      [status, closedAt || '', orderId]
+    )
+  }
+  await persistDb()
+}
+
+export async function moveOrderToTable(orderId, newTableId, newTableName) {
+  requireDb()
+  db.run(
+    `UPDATE orders SET table_id = ?, table_name = ?, is_synced = 0 WHERE id = ?`,
+    [newTableId, newTableName || '', orderId]
+  )
+  await persistDb()
+}
+
+export async function moveOrderItemsToOrder(itemIds, targetOrderId) {
+  requireDb()
+  if (!itemIds || itemIds.length === 0) return
+  const placeholders = itemIds.map(() => '?').join(',')
+  db.run(
+    `UPDATE order_items SET order_id = ?, is_synced = 0 WHERE id IN (${placeholders})`,
+    [targetOrderId, ...itemIds]
+  )
+  await persistDb()
+}
+
+// ── Sync helpers (used by sync.js) ────────────────────────────────
+
+export function getUnsyncedPayments() {
+  requireDb()
+  const res = db.exec(
+    `SELECT p.id, p.local_id, o.remote_id as order_remote_id,
+            p.amount, p.payment_method, p.payer_label, p.processed_by, p.device, p.created_at
+     FROM payments p
+     JOIN orders o ON o.id = p.order_id
+     WHERE p.is_synced = 0 AND o.remote_id IS NOT NULL`
+  )
+  return res.length ? res[0].values : []
+}
+
+export function getUnsyncedPaymentItems() {
+  requireDb()
+  const res = db.exec(
+    `SELECT pi.id, p.remote_id as payment_remote_id, oi.remote_id as order_item_remote_id, pi.payment_id, pi.order_item_id
+     FROM payment_items pi
+     JOIN payments p ON p.id = pi.payment_id
+     LEFT JOIN order_items oi ON oi.id = pi.order_item_id
+     WHERE pi.is_synced = 0 AND p.remote_id IS NOT NULL`
+  )
+  return res.length ? res[0].values : []
+}
+
+export async function markPaymentSynced(id, remoteId) {
+  requireDb()
+  db.run('UPDATE payments SET is_synced = 1, remote_id = ? WHERE id = ?', [String(remoteId), id])
+  await persistDb()
+}
+
+export async function markPaymentItemSynced(id) {
+  requireDb()
+  db.run('UPDATE payment_items SET is_synced = 1 WHERE id = ?', [id])
+  await persistDb()
+}
+
+// Stamp a freshly-created Supabase remote_id onto an order_item we created locally.
+export async function setOrderItemRemoteId(localItemId, remoteId) {
+  requireDb()
+  // order_items doesn't currently have a remote_id column — add it on first call.
+  try { db.run('ALTER TABLE order_items ADD COLUMN remote_id TEXT') } catch {}
+  db.run('UPDATE order_items SET remote_id = ?, is_synced = 1 WHERE id = ?', [String(remoteId), localItemId])
+  await persistDb()
+}
+
+export async function markOrderItemSyncedById(localItemId) {
+  requireDb()
+  db.run('UPDATE order_items SET is_synced = 1 WHERE id = ?', [localItemId])
   await persistDb()
 }

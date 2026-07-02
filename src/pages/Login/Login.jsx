@@ -1,6 +1,15 @@
 import { useState } from 'react'
-import { checkLogin } from '../../lib/localDb.js'
+import { supabase, isSupabaseReady } from '../../lib/supabase.js'
 import './Login.css'
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`[Login] ${label} ${ms}ms içinde yanıt vermedi`)), ms)
+    ),
+  ])
+}
 
 function Login({ onLogin }) {
   const [email,    setEmail]    = useState('')
@@ -8,20 +17,95 @@ function Login({ onLogin }) {
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
     setError('')
     setLoading(true)
+    const cleanEmail = email.trim().toLowerCase()
+    const t0 = performance.now()
+    console.log('[Login] submit →', { email: cleanEmail, isSupabaseReady })
+    try {
+      if (!isSupabaseReady) throw new Error('Supabase yapılandırılmamış. .env dosyasını kontrol edin.')
 
-    setTimeout(() => {
-      const user = checkLogin(email, password)
-      if (user) {
-        onLogin(user)
-      } else {
-        setError('E-posta veya şifre hatalı.')
-        setLoading(false)
+      // Safety net: if signInWithPassword hangs but Supabase fires SIGNED_IN for this email
+      // in the background (e.g. lock-contention edge case), we still treat it as success.
+      let signedInUser = null
+      const sub = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session?.user?.email?.toLowerCase() === cleanEmail) {
+          signedInUser = session.user
+          console.log('[Login] arka plan SIGNED_IN event yakalandı, user.id =', signedInUser.id)
+        }
+      })
+
+      console.time('[Login] signInWithPassword')
+      let authUser = null
+      try {
+        const { data, error: signInError } = await withTimeout(
+          supabase.auth.signInWithPassword({ email: cleanEmail, password }),
+          15000,
+          'signInWithPassword',
+        )
+        console.timeEnd('[Login] signInWithPassword')
+        if (signInError) {
+          console.warn('[Login] signIn error', signInError)
+          throw signInError
+        }
+        authUser = data.user
+      } catch (signInErr) {
+        // Timeout? Check if SIGNED_IN fired in the meantime — if so, recover gracefully.
+        if (signedInUser) {
+          console.log('[Login] signIn timeout, ama SIGNED_IN geldi — kurtarıldı')
+          authUser = signedInUser
+        } else {
+          sub?.data?.subscription?.unsubscribe()
+          throw signInErr
+        }
       }
-    }, 300)
+      sub?.data?.subscription?.unsubscribe()
+      console.log('[Login] signIn ok, user.id =', authUser?.id ?? null)
+      if (!authUser) throw new Error('Giriş başarısız.')
+
+      console.time('[Login] profiles select')
+      const { data: profile, error: profileError } = await withTimeout(
+        supabase
+          .from('profiles')
+          .select('full_name, role, can_take_orders, can_close_tables, can_manage_products')
+          .eq('id', authUser.id)
+          .maybeSingle(),
+        10000,
+        'profiles select',
+      )
+      console.timeEnd('[Login] profiles select')
+      if (profileError) console.warn('[Login] profiles error (devam ediliyor)', profileError)
+      console.log('[Login] profile =', profile ?? '(yok)')
+
+      const finalUser = {
+        id:                  authUser.id,
+        email:               authUser.email,
+        full_name:           profile?.full_name ?? null,
+        role:                profile?.role ?? 'waiter',
+        can_take_orders:     profile?.can_take_orders     ?? true,
+        can_close_tables:    profile?.can_close_tables    ?? false,
+        can_manage_products: profile?.can_manage_products ?? false,
+      }
+      console.log('[Login] onLogin →', finalUser)
+      onLogin(finalUser)
+    } catch (err) {
+      console.error('[Login] hata', err)
+      const msg = err?.message ?? String(err)
+      if (/invalid login credentials/i.test(msg)) {
+        setError('E-posta veya şifre hatalı.')
+      } else if (/yanıt vermedi/i.test(msg)) {
+        setError('Sunucu yanıt vermedi. İnternet ve Supabase URL\'ini kontrol edin.')
+      } else if (/fetch|network/i.test(msg)) {
+        setError('Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin.')
+      } else {
+        setError(msg)
+      }
+    } finally {
+      console.log(`[Login] akış bitti (${Math.round(performance.now() - t0)}ms)`)
+      setLoading(false)
+    }
   }
 
   return (

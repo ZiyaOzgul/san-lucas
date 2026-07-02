@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import './styles/layout.css'
 import { AppProvider, useApp } from './context/AppContext.jsx'
@@ -62,16 +62,25 @@ function AppShell() {
   )
 }
 
-function App() {
-  const [user, setUser] = useState(null)
+function AppContent() {
+  const { currentUser, loginUser, authReady } = useApp()
+  if (!authReady) {
+    return (
+      <div className="app-layout">
+        <div className="db-loading">
+          <span className="db-loading__dot" />
+          Sunucuya bağlanılıyor…
+        </div>
+      </div>
+    )
+  }
+  return currentUser ? <AppShell /> : <Login onLogin={loginUser} />
+}
 
+function App() {
   return (
     <AppProvider>
-      {user ? (
-        <AppShell />
-      ) : (
-        <Login onLogin={setUser} />
-      )}
+      <AppContent />
     </AppProvider>
   )
 }

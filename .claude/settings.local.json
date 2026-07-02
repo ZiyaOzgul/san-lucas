@@ -7,7 +7,17 @@
       "Bash(npx:*)",
       "Bash(ls:*)",
       "mcp__ide__getDiagnostics",
-      "mcp__plugin_supabase_supabase__execute_sql"
+      "mcp__plugin_supabase_supabase__execute_sql",
+      "mcp__plugin_supabase_supabase__apply_migration",
+      "Read(//d/code/Pc apps/**)",
+      "Read(//d/code//**)",
+      "Bash(grep:*)",
+      "Bash(cmd /c \"cd /d \\\\\"D:\\\\code\\\\Pc apps\\\\san-lucas-web\\\\\" && npx tsc --noEmit 2>&1\")",
+      "Bash(cmd /c \"cd /d \\\\\"D:\\\\code\\\\Pc apps\\\\san-lucas-web\\\\\" && npx tsc --noEmit\" 2>&1)",
+      "mcp__plugin_supabase_supabase__list_projects",
+      "mcp__plugin_supabase_supabase__list_tables",
+      "Bash(mkdir -p /c/Users/ziyad/AppData/Local/electron-builder/Cache/winCodeSign)",
+      "Bash(curl -L -o /c/Users/ziyad/AppData/Local/electron-builder/Cache/winCodeSign/winCodeSign-2.6.0.7z https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z)"
     ]
   }
 }
