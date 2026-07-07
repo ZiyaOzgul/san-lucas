@@ -380,6 +380,7 @@ function Staff() {
     setStaffList(getAllStaff())
   }, [dbReady])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reads the external sql.js store into state
   useEffect(() => { loadStaff() }, [loadStaff])
 
   const filtered = searchQuery.trim()

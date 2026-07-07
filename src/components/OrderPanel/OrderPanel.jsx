@@ -103,7 +103,7 @@ function VariantPicker({ product, variants, onSelect, onClose }) {
 // ── Main component ────────────────────────────────────────────────
 function OrderPanel({
   table, tables = [],
-  onClose, onCloseTable, onAddItem, onUpdateNote, onUpdateQty, onRemoveItem,
+  onClose, onCloseTable, onAddItem, onUpdateNote, onRemoveItem,
   onPayOrder, onNewGroup, onMoveOrderToTable, onMoveItemsToTable,
 }) {
   const { products, categories, productVariants } = useApp()
@@ -125,9 +125,8 @@ function OrderPanel({
   const orders     = table.orders ?? []
   const orderItems = orders.flatMap(o => o.items)
   const subtotal   = orderItems.reduce((s, i) => s + i.qty * (i.unitPrice + modifiersSum(i.modifiers)), 0)
-  const tax        = Math.round(subtotal * (table.taxRate ?? 0.10) * 100) / 100
   const discount   = table.discount?.amount ?? 0
-  const total      = subtotal + tax - discount
+  const total      = subtotal - discount
   const isOccupied = orderItems.length > 0
   // Primary manual order group (first one without supabaseOrderId, or first overall)
   const primaryGroup = orders.find(o => o.supabaseOrderId == null) ?? orders[0]
@@ -320,7 +319,8 @@ function OrderPanel({
                         </div>
                       )}
                       {order.items.map(item => {
-                        const selected = selectedItemIds.has(item.id)
+                        const isPaid = !!item.paid
+                        const selected = !isPaid && selectedItemIds.has(item.id)
                         const hasNote = !!(item.note && item.note.trim())
                         const itemMods = item.modifiers || []
                         const hasMods = itemMods.length > 0
@@ -328,12 +328,12 @@ function OrderPanel({
                         return (
                           <div
                             key={`${order.localId}-${item.id}`}
-                            className={`om-item ${selectionMode ? 'om-item--selectable' : ''} ${selected ? 'om-item--selected' : ''}`}
-                            onClick={selectionMode ? () => toggleSelectItem(item.id) : undefined}
+                            className={`om-item ${selectionMode && !isPaid ? 'om-item--selectable' : ''} ${selected ? 'om-item--selected' : ''} ${isPaid ? 'om-item--paid' : ''}`}
+                            onClick={selectionMode && !isPaid ? () => toggleSelectItem(item.id) : undefined}
                           >
                             {selectionMode && (
                               <span className="om-item__checkbox" aria-hidden>
-                                {selected ? '☑' : '☐'}
+                                {isPaid ? '✓' : (selected ? '☑' : '☐')}
                               </span>
                             )}
                             {!selectionMode && (
@@ -368,7 +368,10 @@ function OrderPanel({
                               )}
                             </div>
                             <span className="om-item__total">₺{(item.qty * lineUnit).toLocaleString('tr-TR')}</span>
-                            {!selectionMode && (
+                            {!selectionMode && isPaid && (
+                              <span className="om-item__paid-badge">Ödendi</span>
+                            )}
+                            {!selectionMode && !isPaid && (
                               <>
                                 <button
                                   className={`om-item__icon-btn ${hasMods ? 'om-item__icon-btn--note-on' : ''}`}
@@ -409,12 +412,6 @@ function OrderPanel({
                   <span>Ara Toplam</span>
                   <span>₺{subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
                 </div>
-                {(table.taxRate ?? 0) > 0 && (
-                  <div className="om-totals__row">
-                    <span>KDV (%{Math.round((table.taxRate ?? 0) * 100)})</span>
-                    <span>₺{tax.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                )}
                 {discount > 0 && (
                   <div className="om-totals__row om-totals__row--discount">
                     <span>{table.discount?.label ?? 'İndirim'}</span>

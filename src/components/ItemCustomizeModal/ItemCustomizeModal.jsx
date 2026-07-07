@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import './ItemCustomizeModal.css'
 
@@ -29,17 +29,22 @@ function ItemCustomizeModal({
   // selected: { [modifierId]: quantity }
   const [selected, setSelected] = useState({})
 
-  useEffect(() => {
-    if (!open) return
-    const initial = {}
-    if (initialModifiers?.length) {
-      for (const m of initialModifiers) {
-        const key = m.modifierId ?? m.id
-        if (key != null) initial[key] = m.quantity || 1
+  // Seed the selection when the modal transitions to open (adjust-during-render).
+  // The old effect re-seeded on every parent re-render too, wiping in-progress picks.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      const initial = {}
+      if (initialModifiers?.length) {
+        for (const m of initialModifiers) {
+          const key = m.modifierId ?? m.id
+          if (key != null) initial[key] = m.quantity || 1
+        }
       }
+      setSelected(initial)
     }
-    setSelected(initial)
-  }, [open, initialModifiers])
+  }
 
   if (!open || !product) return null
 

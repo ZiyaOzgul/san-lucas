@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import ConfirmModal from '../../components/ConfirmModal/ConfirmModal.jsx'
+import { imageSrc } from '../../lib/imageSrc.js'
 import './Ingredients.css'
 
 const UNITS = ['ml', 'L', 'g', 'kg', 'adet', 'dilim', 'çay kaşığı', 'yemek kaşığı']
@@ -57,7 +58,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
       <div className="modal ingredient-modal">
         <div className="modal__header">
           <h2 className="modal__title">{isEdit ? 'Malzemeyi Düzenle' : 'Yeni Malzeme Ekle'}</h2>
-          <button className="modal__close" onClick={onClose}>✕</button>
+          <button className="modal__close" onClick={onClose}>âœ•</button>
         </div>
 
         <div className="ingredient-modal__body">
@@ -66,18 +67,18 @@ function IngredientModal({ ingredient, onSave, onClose }) {
             <label className="pm-label">Görsel</label>
             <div className="ingredient-image-picker" onClick={handlePickImage}>
               {imageUrl
-                ? <img src={imageUrl} alt="malzeme" className="ingredient-image-picker__img" />
+                ? <img src={imageSrc(imageUrl)} alt="malzeme" className="ingredient-image-picker__img" onError={e => { e.currentTarget.style.display = 'none' }} />
                 : <span className="ingredient-image-picker__placeholder">Resim seç (isteğe bağlı)</span>
               }
             </div>
             {imageUrl && (
-              <button className="ingredient-image-picker__remove" onClick={() => setImageUrl(null)}>Resmi kaldır</button>
+              <button className="ingredient-image-picker__remove" onClick={() => setImageUrl(null)}>Resmi kaldÄ±r</button>
             )}
           </div>
 
           <div className="pm-field">
-            <label className="pm-label">Malzeme Adı</label>
-            <input className="pm-input" value={name} onChange={e => setName(e.target.value)} placeholder="ör. Espresso, Süt, Vanilya Şurubu" autoFocus />
+            <label className="pm-label">Malzeme AdÄ±</label>
+            <input className="pm-input" value={name} onChange={e => setName(e.target.value)} placeholder="ör. Espresso, Süt, Vanilya �?urubu" autoFocus />
           </div>
           <div className="pm-field">
             <label className="pm-label">Birim</label>
@@ -89,7 +90,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
           {/* Container section */}
           <div className="pm-field-row">
             <div className="pm-field">
-              <label className="pm-label">Konteyner Adı <span className="pm-label-hint">(isteğe bağlı)</span></label>
+              <label className="pm-label">Konteyner AdÄ± <span className="pm-label-hint">(isteÄŸe baÄŸlÄ±)</span></label>
               <input
                 className="pm-input"
                 value={containerName}
@@ -123,7 +124,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
               />
             </div>
             <div className="pm-field">
-              <label className="pm-label">{hasContainer ? `Min. Uyarı (${containerName.trim()})` : 'Min. Uyarı Eşiği'}</label>
+              <label className="pm-label">{hasContainer ? `Min. UyarÄ± (${containerName.trim()})` : 'Min. UyarÄ± EÅŸiÄŸi'}</label>
               <input
                 className="pm-input"
                 type="number"
@@ -143,7 +144,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
         </div>
 
         <div className="modal__footer">
-          <button className="btn btn--secondary" onClick={onClose}>İptal</button>
+          <button className="btn btn--secondary" onClick={onClose}>Ä°ptal</button>
           <button className="btn btn--primary" onClick={handleSave} disabled={!name.trim()}>Kaydet</button>
         </div>
       </div>
@@ -171,7 +172,7 @@ function Ingredients() {
 
   return (
     <div className="page ingredients-page">
-      {/* ── Header ── */}
+      {/* â”€â”€ Header â”€â”€ */}
       <div className="ingredients-header">
         <div className="ingredients-header__left">
           <h1 className="ingredients-title">Malzemeler</h1>
@@ -200,7 +201,7 @@ function Ingredients() {
         </div>
       </div>
 
-      {/* ── Grid ── */}
+      {/* â”€â”€ Grid â”€â”€ */}
       <div className="ingredients-grid">
         {filtered.map(ing => {
           const isLow = ing.minStockAlert > 0 && ing.stockAmount <= ing.minStockAlert
@@ -214,11 +215,16 @@ function Ingredients() {
               onMouseEnter={() => setHoveredId(ing.id)}
               onMouseLeave={() => setHoveredId(null)}
             >
-              {ing.imageUrl && (
-                <div className="ingredient-card__image">
-                  <img src={ing.imageUrl} alt={ing.name} className="ingredient-card__image-img" />
-                </div>
-              )}
+              <div className="ingredient-card__image">
+                {ing.imageUrl ? (
+                  <img src={imageSrc(ing.imageUrl)} alt={ing.name} className="ingredient-card__image-img" onError={e => { e.currentTarget.style.display = 'none' }} />
+                ) : (
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--color-border)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                )}
+              </div>
               <div className="ingredient-card__header">
                 <p className="ingredient-card__name">{ing.name}</p>
                 <span className="ingredient-card__unit">{ing.unit}</span>
@@ -293,7 +299,7 @@ function Ingredients() {
       <ConfirmModal
         open={!!confirmDel}
         title="Malzemeyi Sil"
-        message={confirmDel ? `"${confirmDel.name}" malzemesini silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.` : ''}
+        message={confirmDel ? `"${confirmDel.name}" malzemesini silmek istediÄŸinizden emin misiniz? Bu iÅŸlem geri alÄ±namaz.` : ''}
         confirmText="Sil"
         onConfirm={async () => {
           const id = confirmDel?.id

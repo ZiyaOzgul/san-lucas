@@ -65,7 +65,9 @@ function formatCurrency(n) {
 function paymentLabel(method) {
   if (method === 'cash') return 'Nakit'
   if (method === 'card') return 'Kart'
+  if (method === 'iban') return 'IBAN'
   if (method === 'split') return 'Karma'
+  if (method === 'points') return 'Puan'
   return method || '—'
 }
 
@@ -82,6 +84,18 @@ function paymentIcon(method) {
       <rect x="2" y="5" width="16" height="10" rx="2"/>
       <path d="M2 8h16"/>
       <rect x="5" y="11" width="3" height="1.5" rx="0.5" fill="currentColor" stroke="none"/>
+    </svg>
+  )
+  if (method === 'iban') return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M3 17h14"/>
+      <path d="M4 15v-5M8 15v-5M12 15v-5M16 15v-5"/>
+      <path d="M10 3l7 4H3l7-4z"/>
+    </svg>
+  )
+  if (method === 'points') return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M10 2.5l2.3 4.7 5.2.8-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.8L10 2.5z" strokeLinejoin="round"/>
     </svg>
   )
   // clock icon for active orders

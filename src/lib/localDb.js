@@ -19,6 +19,18 @@ function requireDb() {
   if (!db) throw new Error('[localDb] Database not initialized — call initDb() first')
 }
 
+// Monotonic local id generator. Raw Date.now() (+ a small random offset)
+// collides when many rows are created in the same millisecond — pull loops
+// then silently drop rows via INSERT OR IGNORE, and multi-item order saves
+// throw on the UNIQUE constraint and lose the sale.
+let _lastLocalId = 0
+function newLocalId() {
+  let id = Date.now()
+  if (id <= _lastLocalId) id = _lastLocalId + 1
+  _lastLocalId = id
+  return id
+}
+
 export function isDbInitialized() { return db !== null }
 
 // ── Seed data (inserted once on first run) ────────────────────────
@@ -241,6 +253,7 @@ export async function initDb() {
     `ALTER TABLE order_items ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE orders ADD COLUMN cash_amount REAL`,
     `ALTER TABLE orders ADD COLUMN card_amount REAL`,
+    `ALTER TABLE orders ADD COLUMN iban_amount REAL`,
     `ALTER TABLE orders ADD COLUMN remote_id   TEXT`,
     `ALTER TABLE order_items ADD COLUMN variant_id INTEGER`,
     `ALTER TABLE ingredients ADD COLUMN container_name TEXT`,
@@ -298,6 +311,8 @@ export async function initDb() {
     `CREATE INDEX IF NOT EXISTS idx_modifiers_product_id           ON modifiers(product_id)`,
     `CREATE INDEX IF NOT EXISTS idx_pmod_excludes_product_id       ON product_modifier_excludes(product_id)`,
     `CREATE INDEX IF NOT EXISTS idx_order_item_modifiers_item_id   ON order_item_modifiers(order_item_id)`,
+    // Small key/value store for one-time maintenance flags (travels with the DB file)
+    `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`,
   ]
   for (const sql of migrations) {
     try { db.run(sql) } catch { /* column already exists — ignore */ }
@@ -331,6 +346,36 @@ export async function initDb() {
     await persistDb()
   }
 
+  // One-time migration: move locally-stored images from the old '/products/…'
+  // path (served over HTTP by the dev/Vite server) to the 'app-image://local/…'
+  // scheme (served by the app-image:// protocol handler). Skipped entirely
+  // under a browser dev session (no window.electronAPI) so it can run later
+  // under Electron instead of silently marking itself done.
+  const migrateLegacyImage = window.electronAPI?.images?.migrateLegacy
+  if (migrateLegacyImage) {
+    const imgDoneRes = db.exec("SELECT value FROM meta WHERE key = 'image-path-migration-v1'")
+    const imgDone = imgDoneRes.length && imgDoneRes[0].values.length
+    if (!imgDone) {
+      for (const table of ['products', 'categories', 'ingredients']) {
+        const rows = db.exec(`SELECT id, image_url, remote_id FROM ${table} WHERE image_url LIKE '/products/%'`)
+        if (!rows.length) continue
+        for (const [id, image_url, remote_id] of rows[0].values) {
+          const filename = image_url.split('/').pop()
+          const migrated = await migrateLegacyImage(filename)
+          if (migrated) {
+            db.run(`UPDATE ${table} SET image_url = ? WHERE id = ?`, [`app-image://local/${filename}`, id])
+          } else if (remote_id) {
+            // Leave unchanged — the next pull will overwrite with the https URL
+          } else {
+            db.run(`UPDATE ${table} SET image_url = NULL WHERE id = ?`, [id])
+          }
+        }
+      }
+      db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('image-path-migration-v1', '1')", [])
+      await persistDb()
+    }
+  }
+
   return db
 }
 
@@ -351,7 +396,7 @@ export function getAllTableDefs() {
 
 export async function insertTableDef(name) {
   requireDb()
-  const id = Date.now()
+  const id = newLocalId()
   db.run('INSERT INTO table_defs (id, name) VALUES (?, ?)', [id, name])
   await persistDb()
   return { id, name }
@@ -381,7 +426,7 @@ export function getAllCategories() {
 
 export async function insertCategory({ name, color, icon = 'tag', imageUrl = null }) {
   requireDb()
-  const id = Date.now()
+  const id = newLocalId()
   db.run(
     'INSERT INTO categories (id, name, color, icon, image_url, is_synced) VALUES (?, ?, ?, ?, ?, 0)',
     [id, name, color, icon, imageUrl]
@@ -462,10 +507,19 @@ export async function deleteProduct(id) {
 
 export async function clearAllDataExceptTables() {
   requireDb()
-  db.run('DELETE FROM order_items')
-  db.run('DELETE FROM orders')
-  db.run('DELETE FROM products')
-  db.run('DELETE FROM categories')
+  // Children before parents; sql.js doesn't cascade, so clear everything
+  // explicitly or orphan rows (variants, recipes, payments…) linger and
+  // resurface as ghost data after the next pull.
+  const tables = [
+    'payment_items', 'payments',
+    'order_item_modifiers', 'order_items', 'orders',
+    'product_modifier_excludes', 'modifiers',
+    'product_variant_ingredients', 'product_ingredients', 'product_variants',
+    'products', 'categories', 'ingredients',
+    'pending_deletes',
+  ]
+  for (const t of tables) db.run(`DELETE FROM ${t}`)
+  db.run("DELETE FROM meta WHERE key = 'dedupe-v1'")
   await persistDb()
 }
 
@@ -573,14 +627,28 @@ export function getAllVariantsAll() {
 
 export async function replaceVariants(productId, variants) {
   requireDb()
+  // Snapshot existing variants so kept rows preserve their remote identity
+  // and removed rows leave a tombstone for the remote delete on next sync.
+  const oldRes = db.exec('SELECT id, remote_id, created_at FROM product_variants WHERE product_id = ?', [productId])
+  const oldById = new Map()
+  if (oldRes.length) {
+    for (const [oid, oRemote, oCreated] of oldRes[0].values) {
+      oldById.set(oid, { remoteId: oRemote ?? null, createdAt: oCreated })
+    }
+  }
+
   // Delete existing variants (cascades to product_variant_ingredients)
   db.run('DELETE FROM product_variants WHERE product_id = ?', [productId])
   const now = new Date().toISOString()
+  const keptIds = new Set()
   for (const v of variants) {
-    const vid = v.id && !String(v.id).startsWith('new_') ? v.id : Date.now() + Math.floor(Math.random() * 10000)
+    const isExisting = v.id && !String(v.id).startsWith('new_')
+    const vid = isExisting ? v.id : newLocalId()
+    const old = isExisting ? oldById.get(vid) : null
+    if (isExisting) keptIds.add(vid)
     db.run(
-      'INSERT INTO product_variants (id, product_id, name, price, created_at, is_synced) VALUES (?,?,?,?,?,0)',
-      [vid, productId, v.name, parseFloat(v.price) || 0, now]
+      'INSERT INTO product_variants (id, product_id, name, price, created_at, is_synced, remote_id) VALUES (?,?,?,?,?,0,?)',
+      [vid, productId, v.name, parseFloat(v.price) || 0, old?.createdAt || now, old?.remoteId ?? null]
     )
     for (const ing of (v.ingredients ?? [])) {
       if (!ing.ingredientId) continue
@@ -588,6 +656,12 @@ export async function replaceVariants(productId, variants) {
         'INSERT INTO product_variant_ingredients (variant_id, ingredient_id, amount_used) VALUES (?,?,?)',
         [vid, ing.ingredientId, parseFloat(ing.amountUsed) || 0]
       )
+    }
+  }
+
+  for (const [oid, meta] of oldById) {
+    if (!keptIds.has(oid) && meta.remoteId) {
+      db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('variant', ?)", [meta.remoteId])
     }
   }
   await persistDb()
@@ -768,7 +842,7 @@ export async function upsertModifier({ id, localId, categoryId = null, productId
     await persistDb()
     return id
   }
-  const newId = Date.now() + (Math.random() * 1000 | 0)
+  const newId = newLocalId()
   db.run(
     `INSERT INTO modifiers (id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
@@ -897,16 +971,26 @@ export async function deleteOrderItemModifiers(orderItemId) {
 
 export async function saveCompletedOrder(txData) {
   requireDb()
-  const orderId   = Date.now()
+  const orderId   = newLocalId()
   const localId   = crypto.randomUUID()
   const now       = new Date().toISOString()
   const closedAt  = txData.closedAt ?? now
 
-  const isSplit = txData.paymentMethod === 'split'
-  const cashAmt = isSplit ? (txData.splitCash ?? null)
-                : txData.paymentMethod === 'cash' ? txData.total : null
-  const cardAmt = isSplit ? (txData.splitCard ?? null)
-                : txData.paymentMethod === 'card' ? txData.total : null
+  // Per-method buckets for the payment breakdown report. The modal's payment
+  // rows carry the real method mix (Tutar Gir can mix nakit/kart/iban even
+  // though the order's payment_method collapses to 'split').
+  const payRows = txData.paymentRows ?? []
+  const sumMethod = (m) =>
+    Math.round(payRows.filter(r => r.payment_method === m)
+      .reduce((s, r) => s + Number(r.amount || 0), 0) * 100) / 100
+  let cashAmt = sumMethod('cash')
+  let cardAmt = sumMethod('card')
+  let ibanAmt = sumMethod('iban')
+  if (!payRows.length) {
+    cashAmt = txData.paymentMethod === 'cash' ? txData.total : 0
+    cardAmt = txData.paymentMethod === 'card' ? txData.total : 0
+    ibanAmt = txData.paymentMethod === 'iban' ? txData.total : 0
+  }
 
   // If this was a QR order already in Supabase, mark as pre-synced to avoid duplicate
   const isSynced = txData.supabaseOrderId ? 1 : 0
@@ -915,8 +999,8 @@ export async function saveCompletedOrder(txData) {
   db.run(
     `INSERT INTO orders
        (id, local_id, table_id, table_name, status, payment_method,
-        subtotal, tax, discount, total, cash_amount, card_amount, is_synced, remote_id, created_at, closed_at, waiter_name)
-     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        subtotal, tax, discount, total, cash_amount, card_amount, iban_amount, is_synced, remote_id, created_at, closed_at, waiter_name)
+     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId,
       localId,
@@ -927,8 +1011,9 @@ export async function saveCompletedOrder(txData) {
       txData.tax ?? 0,
       txData.discount ?? 0,
       txData.total,
-      cashAmt,
-      cardAmt,
+      cashAmt > 0 ? cashAmt : null,
+      cardAmt > 0 ? cardAmt : null,
+      ibanAmt > 0 ? ibanAmt : null,
       isSynced,
       remoteId,
       now,
@@ -938,7 +1023,7 @@ export async function saveCompletedOrder(txData) {
   )
 
   for (const item of (txData.items ?? [])) {
-    const itemId = Date.now() + (Math.random() * 1000 | 0)
+    const itemId = newLocalId()
     db.run(
       `INSERT INTO order_items
          (id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, is_synced)
@@ -984,24 +1069,38 @@ export function getDailyRevenue() {
     `SELECT COALESCE(SUM(total), 0)
      FROM orders
      WHERE status = 'completed'
-       AND date(closed_at) = date('now', 'localtime')`
+       AND date(closed_at, 'localtime') = date('now', 'localtime')`
   )
   return res[0]?.values[0][0] ?? 0
 }
 
 // ── Pull helpers (used by sync.js to write Supabase data into localDb) ───────
 
+// A row deleted locally mid-pull must not be re-inserted from the remote
+// snapshot — its tombstone in pending_deletes will delete it remotely on the
+// next push. Checked inside every ...FromRemote insert branch because the
+// snapshot taken at pull start can race with deletes made while pulling.
+function hasPendingDelete(entityType, remoteId) {
+  const res = db.exec(
+    'SELECT 1 FROM pending_deletes WHERE entity_type = ? AND remote_id = ? LIMIT 1',
+    [entityType, Number(remoteId)]
+  )
+  return res.length > 0 && res[0].values.length > 0
+}
+
 export async function upsertCategoryFromRemote({ remoteId, name, color, icon, imageUrl }) {
   requireDb()
-  const existing = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteId)])
+  const existing = db.exec('SELECT id, is_synced FROM categories WHERE remote_id = ?', [String(remoteId)])
   if (existing.length && existing[0].values.length) {
-    const localId = existing[0].values[0][0]
+    const [localId, isSynced] = existing[0].values[0]
+    if (!isSynced) return // local pending edit wins until it has been pushed
     db.run(
       'UPDATE categories SET name=?, color=?, icon=?, image_url=?, is_synced=1 WHERE id=?',
       [name, color, icon ?? 'tag', imageUrl ?? null, localId]
     )
   } else {
-    const localId = Date.now() + (Math.random() * 1000 | 0)
+    if (hasPendingDelete('category', remoteId)) return
+    const localId = newLocalId()
     db.run(
       'INSERT OR IGNORE INTO categories (id, name, color, icon, image_url, is_synced, remote_id) VALUES (?,?,?,?,?,1,?)',
       [localId, name, color, icon ?? 'tag', imageUrl ?? null, String(remoteId)]
@@ -1011,16 +1110,18 @@ export async function upsertCategoryFromRemote({ remoteId, name, color, icon, im
 
 export async function upsertIngredientFromRemote({ remoteId, name, unit, stockAmount, minStockAlert }) {
   requireDb()
-  const existing = db.exec('SELECT id FROM ingredients WHERE remote_id = ?', [String(remoteId)])
+  const existing = db.exec('SELECT id, is_synced FROM ingredients WHERE remote_id = ?', [String(remoteId)])
   if (existing.length && existing[0].values.length) {
     // Update fields — preserve local image and container data
-    const localId = existing[0].values[0][0]
+    const [localId, isSynced] = existing[0].values[0]
+    if (!isSynced) return // local pending edit/stock change wins until pushed
     db.run(
       'UPDATE ingredients SET name=?, unit=?, stock_amount=?, min_stock_alert=?, is_synced=1 WHERE id=?',
       [name, unit, stockAmount, minStockAlert, localId]
     )
   } else {
-    const localId = Date.now() + (Math.random() * 1000 | 0)
+    if (hasPendingDelete('ingredient', remoteId)) return
+    const localId = newLocalId()
     const now = new Date().toISOString()
     db.run(
       'INSERT OR IGNORE INTO ingredients (id, name, unit, stock_amount, min_stock_alert, created_at, is_synced, remote_id) VALUES (?,?,?,?,?,?,1,?)',
@@ -1047,9 +1148,10 @@ export async function upsertModifierFromRemote({ remoteId, remoteCategoryId, rem
     if (localProdId == null) return false
   }
 
-  const existing = db.exec('SELECT id FROM modifiers WHERE remote_id = ?', [String(remoteId)])
+  const existing = db.exec('SELECT id, is_synced FROM modifiers WHERE remote_id = ?', [String(remoteId)])
   if (existing.length && existing[0].values.length) {
-    const localId = existing[0].values[0][0]
+    const [localId, isSynced] = existing[0].values[0]
+    if (!isSynced) return true // local pending edit wins until it has been pushed
     db.run(
       `UPDATE modifiers
        SET category_id = ?, product_id = ?, name = ?, price_delta = ?, sort_order = ?, is_active = ?, is_synced = 1
@@ -1057,7 +1159,8 @@ export async function upsertModifierFromRemote({ remoteId, remoteCategoryId, rem
       [localCatId, localProdId, name, Number(priceDelta) || 0, sortOrder ?? 0, isActive ? 1 : 0, localId]
     )
   } else {
-    const localId = Date.now() + (Math.random() * 1000 | 0)
+    if (hasPendingDelete('modifier', remoteId)) return true
+    const localId = newLocalId()
     db.run(
       `INSERT OR IGNORE INTO modifiers
          (id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, is_synced, remote_id)
@@ -1066,6 +1169,52 @@ export async function upsertModifierFromRemote({ remoteId, remoteCategoryId, rem
        name, Number(priceDelta) || 0, sortOrder ?? 0, isActive ? 1 : 0, String(remoteId)]
     )
   }
+  return true
+}
+
+// Insert/update a product variant coming from Supabase. Resolves the remote
+// product id back to the local product; skips if the parent isn't pulled yet
+// (next pass picks it up) or if the product has a pending local variant set
+// (replaceVariants marks the whole set unsynced — local state is authoritative
+// until pushed).
+export async function upsertVariantFromRemote({ remoteId, remoteProductId, localId, name, price }) {
+  requireDb()
+  const pRes = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteProductId)])
+  const localProdId = pRes.length && pRes[0].values.length ? pRes[0].values[0][0] : null
+  if (localProdId == null) return false
+
+  const dirty = db.exec('SELECT 1 FROM product_variants WHERE product_id = ? AND is_synced = 0 LIMIT 1', [localProdId])
+  if (dirty.length && dirty[0].values.length) return true
+
+  const existing = db.exec('SELECT id FROM product_variants WHERE remote_id = ?', [String(remoteId)])
+  if (existing.length && existing[0].values.length) {
+    db.run(
+      'UPDATE product_variants SET product_id = ?, name = ?, price = ?, is_synced = 1 WHERE id = ?',
+      [localProdId, name, Number(price) || 0, existing[0].values[0][0]]
+    )
+    return true
+  }
+  if (hasPendingDelete('variant', remoteId)) return true
+
+  // Adopt a row this device pushed earlier: the remote local_id is the
+  // integer id we sent at push time.
+  const adoptId = Number(localId)
+  if (localId != null && Number.isFinite(adoptId)) {
+    const own = db.exec('SELECT id FROM product_variants WHERE id = ? AND product_id = ?', [adoptId, localProdId])
+    if (own.length && own[0].values.length) {
+      db.run(
+        'UPDATE product_variants SET name = ?, price = ?, is_synced = 1, remote_id = ? WHERE id = ?',
+        [name, Number(price) || 0, String(remoteId), adoptId]
+      )
+      return true
+    }
+  }
+
+  const newId = newLocalId()
+  db.run(
+    'INSERT OR IGNORE INTO product_variants (id, product_id, name, price, created_at, is_synced, remote_id) VALUES (?,?,?,?,?,1,?)',
+    [newId, localProdId, name, Number(price) || 0, new Date().toISOString(), String(remoteId)]
+  )
   return true
 }
 
@@ -1092,15 +1241,17 @@ export async function upsertProductFromRemote({ remoteId, name, price, stock, re
   const catRes = db.exec('SELECT id FROM categories WHERE remote_id = ?', [String(remoteCatId)])
   const localCatId = catRes.length && catRes[0].values.length ? catRes[0].values[0][0] : remoteCatId
 
-  const existing = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteId)])
+  const existing = db.exec('SELECT id, is_synced FROM products WHERE remote_id = ?', [String(remoteId)])
   if (existing.length && existing[0].values.length) {
-    const localId = existing[0].values[0][0]
+    const [localId, isSynced] = existing[0].values[0]
+    if (!isSynced) return // local pending edit wins until it has been pushed
     db.run(
       'UPDATE products SET name=?, price=?, stock=?, category_id=?, image_url=?, points_value=?, is_synced=1 WHERE id=?',
       [name, price, stock, localCatId, imageUrl ?? null, pointsValue ?? 0, localId]
     )
   } else {
-    const localId = Date.now() + (Math.random() * 1000 | 0)
+    if (hasPendingDelete('product', remoteId)) return
+    const localId = newLocalId()
     db.run(
       'INSERT OR IGNORE INTO products (id, name, price, stock, category_id, image_url, points_value, is_synced, remote_id) VALUES (?,?,?,?,?,?,?,1,?)',
       [localId, name, price, stock, localCatId, imageUrl ?? null, pointsValue ?? 0, String(remoteId)]
@@ -1108,9 +1259,135 @@ export async function upsertProductFromRemote({ remoteId, name, price, stock, re
   }
 }
 
+// ── One-time duplicate cleanup ────────────────────────────────────
+// The old push code upserted categories/ingredients by device-local id, so a
+// row pulled from Supabase forked into a duplicate on every edit (color
+// change, stock consumption). The push is fixed; this merges the duplicates
+// that already exist. Losers are remapped onto a deterministic keeper
+// (prefer the oldest remote row), tombstoned in pending_deletes so the
+// remote copies get deleted on the next push, then removed locally.
+// Idempotent — guarded by a meta flag and safe to run twice.
+export async function dedupeSyncedEntities() {
+  requireDb()
+  const doneRes = db.exec("SELECT value FROM meta WHERE key = 'dedupe-v1'")
+  if (doneRes.length && doneRes[0].values.length) return null
+  const removed = { categories: 0, ingredients: 0 }
+
+  // Keeper preference: has remote_id (oldest remote row wins), else lowest local id
+  const pickKeeper = (rows) => [...rows].sort((a, b) => {
+    const ar = a.remoteId != null ? Number(a.remoteId) : Infinity
+    const br = b.remoteId != null ? Number(b.remoteId) : Infinity
+    if (ar !== br) return ar - br
+    return a.id - b.id
+  })[0]
+
+  const groupBy = (rows, keyFn) => {
+    const groups = new Map()
+    for (const r of rows) {
+      const k = keyFn(r)
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k).push(r)
+    }
+    return groups
+  }
+
+  // ── Categories: group by normalized name ─────────────────────────
+  const catRes = db.exec('SELECT id, name, remote_id FROM categories')
+  const cats = catRes.length ? catRes[0].values.map(([id, name, remote_id]) => ({ id, name, remoteId: remote_id })) : []
+  for (const [, group] of groupBy(cats, c => String(c.name).trim().toLowerCase())) {
+    if (group.length < 2) continue
+    const keeper = pickKeeper(group)
+    for (const loser of group) {
+      if (loser.id === keeper.id) continue
+      // Remap FKs — flag unsynced so the new category assignment pushes too
+      db.run('UPDATE products  SET category_id = ?, is_synced = 0 WHERE category_id = ?', [keeper.id, loser.id])
+      db.run('UPDATE modifiers SET category_id = ?, is_synced = 0 WHERE category_id = ?', [keeper.id, loser.id])
+      if (loser.remoteId != null) {
+        db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('category', ?)", [loser.remoteId])
+      }
+      db.run('DELETE FROM categories WHERE id = ?', [loser.id])
+      removed.categories++
+    }
+  }
+
+  // ── Ingredients: group by normalized name + unit ─────────────────
+  const ingRes = db.exec('SELECT id, name, unit, stock_amount, remote_id FROM ingredients')
+  const ings = ingRes.length ? ingRes[0].values.map(([id, name, unit, stock_amount, remote_id]) =>
+    ({ id, name, unit, stockAmount: stock_amount, remoteId: remote_id })) : []
+  for (const [, group] of groupBy(ings, i => `${String(i.name).trim().toLowerCase()}|${i.unit}`)) {
+    if (group.length < 2) continue
+    const keeper = pickKeeper(group)
+    // Duplicates fork with independently-decremented stock — keep the max
+    // (safest against dupes that were zeroed by double consumption)
+    const maxStock = Math.max(...group.map(i => Number(i.stockAmount) || 0))
+    if (maxStock !== (Number(keeper.stockAmount) || 0)) {
+      db.run('UPDATE ingredients SET stock_amount = ?, is_synced = 0 WHERE id = ?', [maxStock, keeper.id])
+    }
+    for (const loser of group) {
+      if (loser.id === keeper.id) continue
+      // Recipe remaps — drop loser rows that would collide with an existing keeper row
+      db.run(
+        `DELETE FROM product_variant_ingredients WHERE ingredient_id = ?
+         AND variant_id IN (SELECT variant_id FROM product_variant_ingredients WHERE ingredient_id = ?)`,
+        [loser.id, keeper.id]
+      )
+      db.run('UPDATE product_variant_ingredients SET ingredient_id = ? WHERE ingredient_id = ?', [keeper.id, loser.id])
+      db.run(
+        `DELETE FROM product_ingredients WHERE ingredient_id = ?
+         AND product_id IN (SELECT product_id FROM product_ingredients WHERE ingredient_id = ?)`,
+        [loser.id, keeper.id]
+      )
+      db.run('UPDATE product_ingredients SET ingredient_id = ? WHERE ingredient_id = ?', [keeper.id, loser.id])
+      if (loser.remoteId != null) {
+        db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('ingredient', ?)", [loser.remoteId])
+      }
+      db.run('DELETE FROM ingredients WHERE id = ?', [loser.id])
+      removed.ingredients++
+    }
+  }
+
+  db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('dedupe-v1', ?)", [new Date().toISOString()])
+  await persistDb()
+  return removed
+}
+
+// Remove local rows whose remote counterpart no longer exists (deleted on
+// another device, or product deactivated). Only fully-synced rows are touched
+// (is_synced = 1 with a remote_id) so pending local work is never dropped.
+// The caller must skip this when the remote set came back empty — an empty
+// list usually means RLS/auth returned nothing, not an intentional full wipe.
+export function reconcileRemoteDeletions(entityType, remoteIds) {
+  requireDb()
+  if (!remoteIds || remoteIds.length === 0) return 0
+  const tableMap = {
+    category: 'categories', product: 'products', ingredient: 'ingredients',
+    variant: 'product_variants', modifier: 'modifiers',
+  }
+  const table = tableMap[entityType]
+  if (!table) return 0
+  const idSet = new Set(remoteIds.map(String))
+  const res = db.exec(`SELECT id, remote_id FROM ${table} WHERE remote_id IS NOT NULL AND is_synced = 1`)
+  let removed = 0
+  if (res.length) {
+    for (const [localId, remoteId] of res[0].values) {
+      if (!idSet.has(String(remoteId))) {
+        db.run(`DELETE FROM ${table} WHERE id = ?`, [localId])
+        removed++
+      }
+    }
+  }
+  // sql.js doesn't enforce FK cascades — sweep recipe/variant orphans
+  if (removed > 0 && (entityType === 'product' || entityType === 'variant')) {
+    db.run('DELETE FROM product_variants WHERE product_id NOT IN (SELECT id FROM products)')
+    db.run('DELETE FROM product_ingredients WHERE product_id NOT IN (SELECT id FROM products)')
+    db.run('DELETE FROM product_variant_ingredients WHERE variant_id NOT IN (SELECT id FROM product_variants)')
+  }
+  return removed
+}
+
 // ── Sync helpers (used by sync.js) ────────────────────────────────
 export function getUnsyncedCategories() {
-  const res = db.exec('SELECT id, name, color, icon, image_url FROM categories WHERE is_synced = 0')
+  const res = db.exec('SELECT id, name, color, icon, image_url, remote_id FROM categories WHERE is_synced = 0')
   return res.length ? res[0].values : []
 }
 
@@ -1121,18 +1398,30 @@ export function getUnsyncedProducts() {
   return res.length ? res[0].values : []
 }
 
+// If the local row was deleted while its push was in flight, marking it
+// synced is a no-op — but the freshly-created/updated remote copy would then
+// resurrect on the next pull. Tombstone it so the next push deletes it.
+function tombstoneIfRowGone(entityType, remoteId) {
+  if (db.getRowsModified() === 0) {
+    db.run('INSERT INTO pending_deletes (entity_type, remote_id) VALUES (?, ?)', [entityType, remoteId])
+  }
+}
+
 export async function markCategorySynced(id, remoteId) {
   db.run('UPDATE categories SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  tombstoneIfRowGone('category', remoteId)
   await persistDb()
 }
 
 export async function markProductSynced(id, remoteId) {
   db.run('UPDATE products SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  tombstoneIfRowGone('product', remoteId)
   await persistDb()
 }
 
 export async function markIngredientSynced(id, remoteId) {
   db.run('UPDATE ingredients SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  tombstoneIfRowGone('ingredient', remoteId)
   await persistDb()
 }
 
@@ -1149,12 +1438,13 @@ export function getUnsyncedVariants() {
 
 export async function markVariantSynced(id, remoteId) {
   db.run('UPDATE product_variants SET is_synced = 1, remote_id = ? WHERE id = ?', [remoteId, id])
+  tombstoneIfRowGone('variant', remoteId)
   await persistDb()
 }
 
 export function getUnsyncedOrders() {
   const res = db.exec(
-    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name
+    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, remote_id
      FROM orders WHERE is_synced = 0`
   )
   return res.length ? res[0].values : []
@@ -1164,7 +1454,7 @@ export function getUnsyncedOrderItems() {
   const res = db.exec(
     `SELECT oi.id, oi.local_id, o.remote_id as order_remote_id,
             oi.quantity, oi.unit_price, p.remote_id as product_remote_id,
-            pv.remote_id as variant_remote_id, oi.note, oi.added_at
+            pv.remote_id as variant_remote_id, oi.note, oi.added_at, oi.remote_id
      FROM order_items oi
      JOIN orders o ON o.id = oi.order_id
      LEFT JOIN products p ON p.id = oi.product_id
@@ -1210,6 +1500,7 @@ export function getUnsyncedModifiers() {
 
 export async function markModifierSynced(id, remoteId) {
   db.run('UPDATE modifiers SET is_synced = 1, remote_id = ? WHERE id = ?', [String(remoteId), id])
+  tombstoneIfRowGone('modifier', remoteId)
   await persistDb()
 }
 
@@ -1276,10 +1567,16 @@ export function getUnsyncedCount() {
     SELECT
       (SELECT COUNT(*) FROM categories               WHERE is_synced = 0) +
       (SELECT COUNT(*) FROM products                 WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM ingredients              WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM product_variants         WHERE is_synced = 0) +
       (SELECT COUNT(*) FROM orders                   WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM order_items              WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM payments                 WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM payment_items            WHERE is_synced = 0) +
       (SELECT COUNT(*) FROM modifiers                WHERE is_synced = 0) +
       (SELECT COUNT(*) FROM product_modifier_excludes WHERE is_synced = 0) +
-      (SELECT COUNT(*) FROM order_item_modifiers     WHERE is_synced = 0)
+      (SELECT COUNT(*) FROM order_item_modifiers     WHERE is_synced = 0) +
+      (SELECT COUNT(*) FROM pending_deletes)
     AS total
   `)
   return res[0]?.values[0][0] ?? 0
@@ -1339,10 +1636,10 @@ export function getRevenueByPeriod(mode) {
     )
     const map = {}
     if (res.length) res[0].values.forEach(([h, v]) => { map[h] = v })
-    return Array.from({ length: 15 }, (_, i) => {
-      const h = i + 8
-      return { label: `${pad(h)}:00`, value: map[h] ?? 0 }
-    })
+    // Full 24-hour window (00–23)
+    return Array.from({ length: 24 }, (_, h) => (
+      { label: `${pad(h)}:00`, value: map[h] ?? 0 }
+    ))
   }
 
   if (mode === 'week') {
@@ -1410,14 +1707,18 @@ export function getPaymentBreakdown(startIso, endIso) {
                          ELSE 0 END), 0) as nakit,
        COALESCE(SUM(CASE WHEN payment_method='card'  THEN total
                          WHEN payment_method='split' THEN COALESCE(card_amount,0)
-                         ELSE 0 END), 0) as kart
+                         ELSE 0 END), 0) as kart,
+       COALESCE(SUM(CASE WHEN payment_method='iban'  THEN total
+                         WHEN payment_method='split' THEN COALESCE(iban_amount,0)
+                         ELSE 0 END), 0) as iban
      FROM orders WHERE status='completed' ${clause}`,
     params
   )
-  const [nakit, kart] = res[0]?.values[0] ?? [0, 0]
+  const [nakit, kart, iban] = res[0]?.values[0] ?? [0, 0, 0]
   return [
     { name: 'Nakit', value: nakit },
     { name: 'Kart',  value: kart },
+    { name: 'IBAN',  value: iban },
   ]
 }
 
@@ -1772,7 +2073,7 @@ export async function upsertActiveOrderFromRemote(order) {
        order.closed_at || '', order.waiter_name || null, String(order.id)]
     )
   } else {
-    const localId = Date.now() + (Math.random() * 1000 | 0)
+    const localId = newLocalId()
     db.run(
       `INSERT OR IGNORE INTO orders
         (id, local_id, table_id, table_name, status, payment_method, total,
@@ -1790,7 +2091,7 @@ export async function upsertActiveOrderFromRemote(order) {
 
 export async function insertPayment({ localId, orderId, amount, paymentMethod, payerLabel, processedBy, device = 'desktop', createdAt }) {
   requireDb()
-  const id = Date.now() + (Math.random() * 1000 | 0)
+  const id = newLocalId()
   const now = createdAt || new Date().toISOString()
   db.run(
     `INSERT INTO payments
@@ -1866,9 +2167,9 @@ export function getOrderTotalPaid(orderId) {
 
 // ── Active orders local CRUD (one active order per table) ─────────
 
-export async function insertActiveOrder({ tableId, tableName, waiterName, processedBy }) {
+export async function insertActiveOrder({ tableId, tableName, waiterName }) {
   requireDb()
-  const id = Date.now() + (Math.random() * 1000 | 0)
+  const id = newLocalId()
   const now = new Date().toISOString()
   db.run(
     `INSERT INTO orders
@@ -1902,20 +2203,263 @@ export function getActiveOrderForTable(tableId) {
 export function getOrderItemRows(orderId) {
   requireDb()
   const res = db.exec(
-    `SELECT id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced
+    `SELECT id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced, remote_id
      FROM order_items WHERE order_id = ? ORDER BY COALESCE(added_at, ''), id`,
     [orderId]
   )
   if (!res.length) return []
-  return res[0].values.map(([id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced]) => ({
+  return res[0].values.map(([id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced, remote_id]) => ({
     id, local_id, order_id, product_id, variant_id, name, quantity, unit_price,
     note: note || null, added_at: added_at || null, is_synced: !!is_synced,
+    remote_id: remote_id ?? null,
   }))
+}
+
+// Remote ids for a set of local order_items ids — used when pushing
+// payment_items junctions immediately after a payment.
+export function getOrderItemRemoteIds(itemIds) {
+  requireDb()
+  if (!itemIds?.length) return {}
+  const placeholders = itemIds.map(() => '?').join(',')
+  const res = db.exec(`SELECT id, remote_id FROM order_items WHERE id IN (${placeholders})`, itemIds)
+  const map = {}
+  if (res.length) {
+    for (const [id, remote] of res[0].values) {
+      if (remote != null) map[id] = remote
+    }
+  }
+  return map
+}
+
+// ── Partial payment support ───────────────────────────────────────
+// Materialize a runtime order group (Tables.jsx runtimeStates) into the local
+// orders/order_items tables so payments have something durable to attach to.
+// Idempotent: the order is keyed by the group's runtime localId (uuid), items
+// are reconciled by runtime id (manual items → order_items.local_id, QR items
+// → order_items.remote_id), and rows dropped from the runtime group are
+// deleted unless already paid. QR groups map onto their existing Supabase
+// order via remote_id instead of creating a second remote order.
+export async function ensurePersistedActiveOrder({ tableId, tableName, waiterName = null, groupLocalId, supabaseOrderId = null, items = [], total = 0 }) {
+  requireDb()
+  let orderId = null
+  let remoteId = supabaseOrderId != null ? String(supabaseOrderId) : null
+
+  let res = db.exec("SELECT id, remote_id FROM orders WHERE local_id = ? AND status = 'active'", [String(groupLocalId)])
+  if (!(res.length && res[0].values.length) && supabaseOrderId != null) {
+    res = db.exec("SELECT id, remote_id FROM orders WHERE remote_id = ? AND status = 'active'", [String(supabaseOrderId)])
+  }
+  if (res.length && res[0].values.length) {
+    orderId  = res[0].values[0][0]
+    remoteId = res[0].values[0][1] != null ? String(res[0].values[0][1]) : remoteId
+    // Only flag unsynced when something actually changed — this runs on a
+    // debounce for every open table and must not spam the push queue
+    db.run(
+      `UPDATE orders SET total = ?, table_id = ?, table_name = ?,
+              is_synced = CASE WHEN total = ? AND table_id = ? AND table_name = ? THEN is_synced ELSE 0 END
+       WHERE id = ?`,
+      [Number(total) || 0, tableId, tableName || '',
+       Number(total) || 0, tableId, tableName || '', orderId])
+  } else {
+    orderId = newLocalId()
+    db.run(
+      `INSERT INTO orders
+         (id, local_id, table_id, table_name, status, payment_method, total,
+          is_synced, remote_id, created_at, closed_at, waiter_name)
+       VALUES (?, ?, ?, ?, 'active', '', ?, ?, ?, ?, '', ?)`,
+      [orderId, String(groupLocalId), tableId, tableName || '',
+       Number(total) || 0, remoteId ? 1 : 0, remoteId, new Date().toISOString(), waiterName || null]
+    )
+  }
+
+  const rowsRes = db.exec('SELECT id, local_id, remote_id, quantity, unit_price, note FROM order_items WHERE order_id = ?', [orderId])
+  const byLocal = new Map()
+  const byRemote = new Map()
+  if (rowsRes.length) {
+    for (const [rid, rLocal, rRemote, rQty, rPrice, rNote] of rowsRes[0].values) {
+      const row = { id: rid, qty: rQty, unitPrice: rPrice, note: rNote ?? null }
+      byLocal.set(String(rLocal), row)
+      if (rRemote != null) byRemote.set(String(rRemote), row)
+    }
+  }
+
+  const itemIdMap = {}
+  const seen = new Set()
+  for (const it of items) {
+    const key = String(it.id)
+    // QR items carry their Supabase integer id as the runtime id
+    const isRemoteItem = supabaseOrderId != null && /^\d+$/.test(key)
+    const existing = isRemoteItem ? (byRemote.get(key) ?? byLocal.get(key)) : byLocal.get(key)
+    if (existing != null) {
+      const qty = Number(it.qty) || 1
+      const unitPrice = Number(it.unitPrice) || 0
+      const note = it.note || null
+      if (existing.qty !== qty || existing.unitPrice !== unitPrice || existing.note !== note) {
+        db.run('UPDATE order_items SET quantity = ?, unit_price = ?, note = ?, is_synced = 0 WHERE id = ?',
+          [qty, unitPrice, note, existing.id])
+      }
+      itemIdMap[it.id] = existing.id
+      seen.add(existing.id)
+      continue
+    }
+    const newId = newLocalId()
+    db.run(
+      `INSERT INTO order_items
+         (id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced, remote_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [newId,
+       isRemoteItem ? crypto.randomUUID() : key,
+       orderId,
+       it.productId ?? null, it.variantId ?? null, it.name,
+       Number(it.qty) || 1, Number(it.unitPrice) || 0, it.note || null,
+       it.addedAt ?? new Date().toISOString(),
+       isRemoteItem ? 1 : 0,
+       isRemoteItem ? key : null]
+    )
+    for (const m of (it.modifiers ?? [])) {
+      db.run(
+        `INSERT INTO order_item_modifiers (local_id, order_item_id, modifier_id, name, price_delta, quantity, is_synced)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), newId, m.modifierId ?? m.id ?? null, m.name,
+         Number(m.priceDelta) || 0, Math.max(1, Number(m.quantity) || 1), isRemoteItem ? 1 : 0]
+      )
+    }
+    itemIdMap[it.id] = newId
+    seen.add(newId)
+  }
+
+  // Drop persisted rows no longer in the runtime group — unless already paid
+  const paidSet = getPaidItemIds(orderId)
+  if (rowsRes.length) {
+    for (const [rid] of rowsRes[0].values) {
+      if (!seen.has(rid) && !paidSet.has(rid)) {
+        db.run('DELETE FROM order_item_modifiers WHERE order_item_id = ?', [rid])
+        db.run('DELETE FROM order_items WHERE id = ?', [rid])
+      }
+    }
+  }
+
+  await persistDb()
+  return { orderId, remoteId, itemIdMap }
+}
+
+// Local active orders that also exist on Supabase — the pull uses these to
+// fetch payments recorded on other devices (e.g. mobile split payments).
+export function getActiveRemoteOrders() {
+  requireDb()
+  const res = db.exec("SELECT id, remote_id FROM orders WHERE status = 'active' AND remote_id IS NOT NULL")
+  if (!res.length) return []
+  return res[0].values.map(([id, remote_id]) => ({ id, remoteId: remote_id }))
+}
+
+// A payment recorded on another device. Matched by remote_id, then by
+// local_id (a payment this device pushed earlier); inserted as pre-synced.
+export async function upsertPaymentFromRemote({ remoteId, localId, localOrderId, amount, paymentMethod, payerLabel, processedBy, device, createdAt }) {
+  requireDb()
+  let res = db.exec('SELECT id FROM payments WHERE remote_id = ?', [String(remoteId)])
+  if (res.length && res[0].values.length) return false
+  if (localId) {
+    res = db.exec('SELECT id FROM payments WHERE local_id = ?', [String(localId)])
+    if (res.length && res[0].values.length) {
+      db.run('UPDATE payments SET remote_id = ?, is_synced = 1 WHERE id = ?', [String(remoteId), res[0].values[0][0]])
+      return false
+    }
+  }
+  const id = newLocalId()
+  db.run(
+    `INSERT INTO payments
+       (id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, is_synced, remote_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    [id, localId || crypto.randomUUID(), localOrderId, Number(amount) || 0,
+     paymentMethod || 'cash', payerLabel || null, processedBy || null,
+     device || 'remote', String(remoteId), createdAt || new Date().toISOString()]
+  )
+  return true
+}
+
+export function upsertPaymentItemFromRemote({ remotePaymentId, remoteOrderItemId }) {
+  requireDb()
+  const p  = db.exec('SELECT id FROM payments WHERE remote_id = ?', [String(remotePaymentId)])
+  const oi = db.exec('SELECT id FROM order_items WHERE remote_id = ?', [String(remoteOrderItemId)])
+  const paymentId = p.length && p[0].values.length ? p[0].values[0][0] : null
+  const itemId    = oi.length && oi[0].values.length ? oi[0].values[0][0] : null
+  if (paymentId == null || itemId == null) return false
+  db.run('INSERT OR IGNORE INTO payment_items (payment_id, order_item_id, is_synced) VALUES (?, ?, 1)', [paymentId, itemId])
+  return true
+}
+
+// The order was closed (or cancelled) on another device — mirror it locally
+// as already-synced so we don't push the status back.
+export async function mirrorRemoteOrderStatus(orderId, { status, paymentMethod = null, closedAt = null }) {
+  requireDb()
+  db.run(
+    `UPDATE orders SET status = ?, payment_method = COALESCE(?, payment_method),
+            closed_at = COALESCE(NULLIF(?, ''), NULLIF(closed_at, ''), ?), is_synced = 1
+     WHERE id = ?`,
+    [status, paymentMethod, closedAt ?? '', new Date().toISOString(), orderId]
+  )
+  await persistDb()
+}
+
+// Close a materialized order with full financials so the reports
+// (payment breakdown, KPIs) see the same columns saveCompletedOrder writes.
+export async function completeActiveOrder(orderId, { subtotal, tax, discount, closedAt = null }) {
+  requireDb()
+  const payments = getOrderPayments(orderId)
+  const sumMethod = (pred) => payments.filter(pred).reduce((s, p) => s + Number(p.amount), 0)
+  const cash   = sumMethod(p => p.payment_method === 'cash')
+  const iban   = sumMethod(p => p.payment_method === 'iban')
+  const points = sumMethod(p => p.payment_method === 'points')
+  const card   = sumMethod(p => !['cash', 'iban', 'points'].includes(p.payment_method))
+  const used = [['cash', cash], ['card', card], ['iban', iban], ['points', points]].filter(([, v]) => v > 0)
+  const method = used.length > 1 ? 'split' : (used[0]?.[0] ?? 'card')
+  db.run(
+    `UPDATE orders SET status = 'completed', payment_method = ?, subtotal = ?, tax = ?, discount = ?,
+            cash_amount = ?, card_amount = ?, iban_amount = ?, closed_at = ?, is_synced = 0
+     WHERE id = ?`,
+    [method, Number(subtotal) || 0, Number(tax) || 0, Number(discount) || 0,
+     cash > 0 ? cash : null, card > 0 ? card : null, iban > 0 ? iban : null,
+     closedAt || new Date().toISOString(), orderId]
+  )
+  await persistDb()
+  return { method }
+}
+
+// Hard-remove a never-synced active order the UI dropped (nothing paid) —
+// keeps hydration from resurrecting ghost tables.
+export async function deleteActiveOrderCascade(orderId) {
+  requireDb()
+  db.run('DELETE FROM order_item_modifiers WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)', [orderId])
+  db.run('DELETE FROM order_items WHERE order_id = ?', [orderId])
+  db.run('DELETE FROM orders WHERE id = ?', [orderId])
+  await persistDb()
+}
+
+// All active (materialized) orders with their items, modifiers and paid state.
+// Used to rebuild runtimeStates after an app restart so partially-paid tables
+// survive; tables that never had a partial payment stay volatile as before.
+export function getAllActiveOrders() {
+  requireDb()
+  const res = db.exec(
+    `SELECT id, local_id, table_id, table_name, total, remote_id, created_at, waiter_name
+     FROM orders WHERE status = 'active' ORDER BY created_at, id`
+  )
+  if (!res.length) return []
+  return res[0].values.map(([id, local_id, table_id, table_name, total, remote_id, created_at, waiter_name]) => {
+    const rows = getOrderItemRows(id)
+    const modsMap = getModifiersForOrderItems(rows.map(r => r.id))
+    const paidSet = getPaidItemIds(id)
+    return {
+      id, local_id, table_id, table_name, total,
+      remote_id: remote_id ?? null, created_at, waiter_name: waiter_name || null,
+      totalPaid: getOrderTotalPaid(id),
+      items: rows.map(r => ({ ...r, modifiers: modsMap[r.id] || [], paid: paidSet.has(r.id) })),
+    }
+  })
 }
 
 export async function insertOrderItem({ orderId, productId, variantId, name, unitPrice, note, modifiers }) {
   requireDb()
-  const id = Date.now() + (Math.random() * 1000 | 0)
+  const id = newLocalId()
   const now = new Date().toISOString()
   db.run(
     `INSERT INTO order_items
@@ -2027,11 +2571,10 @@ export async function markPaymentItemSynced(id) {
   await persistDb()
 }
 
-// Stamp a freshly-created Supabase remote_id onto an order_item we created locally.
+// Stamp a freshly-created Supabase remote_id onto an order_item we created
+// locally. (The remote_id column is guaranteed by the initDb migrations.)
 export async function setOrderItemRemoteId(localItemId, remoteId) {
   requireDb()
-  // order_items doesn't currently have a remote_id column — add it on first call.
-  try { db.run('ALTER TABLE order_items ADD COLUMN remote_id TEXT') } catch {}
   db.run('UPDATE order_items SET remote_id = ?, is_synced = 1 WHERE id = ?', [String(remoteId), localItemId])
   await persistDb()
 }

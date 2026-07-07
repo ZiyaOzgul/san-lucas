@@ -12,10 +12,10 @@ import {
   insertPayment,
   insertPaymentItems,
   markPaymentSynced,
-  markPaymentItemSynced,
   getOrderPayments as localGetOrderPayments,
   getPaidItemIds as localGetPaidItemIds,
   getOrderTotalPaid,
+  getOrderItemRemoteIds,
   persistDb,
 } from './localDb.js'
 
@@ -35,7 +35,6 @@ function uuid() {
 export async function addPayments({
   orderLocalId,           // local sql.js orders.id
   orderRemoteId,          // supabase orders.id (may be null while offline)
-  tableId,
   total,                  // current order total (Number)
   processedBy = null,
   rows = [],
@@ -90,21 +89,16 @@ export async function addPayments({
         if (!error && data) {
           await markPaymentSynced(id, data.id)
 
-          // Push junction rows that have a known order_item.remote_id
+          // Push junction rows that have a known order_item.remote_id.
+          // order_item_ids are LOCAL sql.js ids — resolve their remote ids
+          // from the local store. Items not yet pushed are retried by sync.js.
           if (row.order_item_ids?.length) {
-            // We need the order_items remote ids — they should already be synced
-            // via sync.js. If any are missing, sync.js will retry on next pass.
-            const { data: itemRows } = await supabase
-              .from('order_items')
-              .select('id, local_id')
-              .in('id', row.order_item_ids.filter(Boolean))
-            // Map only the items that exist in Supabase
-            const remoteIds = (itemRows || []).map(r => r.id)
-            if (remoteIds.length > 0) {
-              const junction = remoteIds.map(rid => ({
-                payment_id: Number(data.id),
-                order_item_id: Number(rid),
-              }))
+            const remoteMap = getOrderItemRemoteIds(row.order_item_ids.filter(Boolean))
+            const junction = Object.values(remoteMap).map(rid => ({
+              payment_id: Number(data.id),
+              order_item_id: Number(rid),
+            }))
+            if (junction.length > 0) {
               await supabase
                 .from('payment_items')
                 .upsert(junction, { onConflict: 'order_item_id', ignoreDuplicates: true })

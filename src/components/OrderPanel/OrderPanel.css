@@ -774,3 +774,25 @@
   font-weight: 800;
   color: var(--color-text-primary, #1a1a2e);
 }
+
+/* ── Paid items (partial payment in progress) ── */
+.om-item--paid {
+  opacity: 0.55;
+}
+
+.om-item--paid .om-item__name,
+.om-item--paid .om-item__total {
+  text-decoration: line-through;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.om-item__paid-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--color-success, #22c55e);
+  background: var(--color-success-light, #dcfce7);
+  border-radius: var(--radius-pill, 20px);
+  padding: 3px 8px;
+}

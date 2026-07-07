@@ -21,7 +21,7 @@ const TABS = [
   { id: 'total', label: 'Toplam',   revenueLabel: 'Toplam Ciro',   orderLabel: 'Toplam Sipariş',   chartTitle: 'Aylık Ciro' },
 ]
 
-const PIE_COLORS = ['#e8975a', '#6366f1']
+const PIE_COLORS = ['#e8975a', '#6366f1', '#0d9488']
 
 function getDateRange(tabId) {
   const now = new Date()
@@ -67,7 +67,7 @@ function Reports() {
   const [kpis,         setKpis]         = useState({ revenue: 0, orderCount: 0, avgOrder: 0 })
   const [topProduct,   setTopProduct]   = useState({ name: '—', qty: 0 })
   const [periodData,   setPeriodData]   = useState([])
-  const [paymentData,  setPaymentData]  = useState([{ name: 'Nakit', value: 0 }, { name: 'Kart', value: 0 }])
+  const [paymentData,  setPaymentData]  = useState([{ name: 'Nakit', value: 0 }, { name: 'Kart', value: 0 }, { name: 'IBAN', value: 0 }])
   const [tableRevData, setTableRevData] = useState([])
   const [topProducts,  setTopProducts]  = useState([])
   const [detailData,   setDetailData]   = useState([])
@@ -81,6 +81,7 @@ function Reports() {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
   const [expandedItems,   setExpandedItems]   = useState([])
 
+  /* eslint-disable react-hooks/set-state-in-effect -- reads the external sql.js store into state */
   useEffect(() => {
     if (!dbReady) return
     const [start, end] = getDateRange(activeTab)
@@ -97,6 +98,7 @@ function Reports() {
     setOrdersList(getOrdersList(start, end))
     setExpandedOrderId(null)
   }, [activeTab, dbReady])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const tab = TABS.find(t => t.id === activeTab)
   const totalPayment = paymentData.reduce((s, d) => s + d.value, 0)
@@ -136,7 +138,8 @@ function Reports() {
     return 'ok'
   }
 
-  const xAxisInterval = activeTab === 'month' ? 4 : 0
+  // 24 hourly bars / 31 daily bars would crowd the axis — skip labels
+  const xAxisInterval = activeTab === 'month' ? 4 : activeTab === 'today' ? 1 : 0
 
   return (
     <div className="page reports-page">
@@ -189,8 +192,10 @@ function Reports() {
           <div className="rpt-card">
             <div className="rpt-card__header">
               <span className="rpt-card__title">{tab.chartTitle}</span>
-              {activeTab === 'today' && (
-                <span className="rpt-card__sub">08:00 – 22:00</span>
+              {activeTab === 'today' && periodData.length > 0 && (
+                <span className="rpt-card__sub">
+                  {periodData[0].label} – {periodData[periodData.length - 1].label}
+                </span>
               )}
             </div>
             <div style={{ height: 220 }}>
@@ -492,7 +497,7 @@ function Reports() {
                     <td className="rpt-order-summary">{order.itemsSummary}</td>
                     <td>
                       <span className={`rpt-pay-badge rpt-pay-badge--${order.paymentMethod}`}>
-                        {order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod === 'card' ? 'Kart' : 'Karma'}
+                        {order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'iban' ? 'IBAN' : 'Karma'}
                       </span>
                     </td>
                     <td>{order.waiterName || '—'}</td>

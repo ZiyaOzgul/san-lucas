@@ -17,7 +17,9 @@
       "mcp__plugin_supabase_supabase__list_projects",
       "mcp__plugin_supabase_supabase__list_tables",
       "Bash(mkdir -p /c/Users/ziyad/AppData/Local/electron-builder/Cache/winCodeSign)",
-      "Bash(curl -L -o /c/Users/ziyad/AppData/Local/electron-builder/Cache/winCodeSign/winCodeSign-2.6.0.7z https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z)"
+      "Bash(curl -L -o /c/Users/ziyad/AppData/Local/electron-builder/Cache/winCodeSign/winCodeSign-2.6.0.7z https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z)",
+      "Bash(cat ~/.claude.json 2>/dev/null | head -c 3000; echo \"---\"; ls ~/.claude/plugins 2>/dev/null; echo \"---repo config---\"; cat \"/d/code/Pc apps/san-lucas/.claude/settings.json\" 2>/dev/null; cat \"/d/code/Pc apps/san-lucas/.mcp.json\" 2>/dev/null)",
+      "Bash(xargs wc -l)"
     ]
   }
 }

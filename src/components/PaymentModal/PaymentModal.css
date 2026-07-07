@@ -126,7 +126,7 @@
 
 .pm-items__head {
   display: grid;
-  grid-template-columns: 50px 1fr 90px 90px;
+  grid-template-columns: 28px 44px 1fr 90px 90px;
   gap: 8px;
   padding: 8px 12px;
   font-size: 11px;
@@ -140,11 +140,54 @@
 
 .pm-item {
   display: grid;
-  grid-template-columns: 50px 1fr 90px 90px;
+  grid-template-columns: 28px 44px 1fr 90px 90px;
   gap: 8px;
   align-items: center;
   padding: 12px 12px;
   border-radius: 6px;
+}
+
+.pm-item--selectable {
+  cursor: pointer;
+  transition: background-color 0.12s ease, outline-color 0.12s ease;
+}
+
+.pm-item--selectable:hover {
+  background-color: var(--color-accent-light);
+}
+
+.pm-item--selected,
+.pm-item--selected.pm-item--alt,
+.pm-item--selected.pm-item--selectable:hover {
+  background-color: var(--color-success-light);
+  outline: 1.5px solid var(--color-success);
+}
+
+.pm-item__check {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid var(--color-border);
+  background-color: var(--color-bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  color: transparent;
+}
+
+.pm-item__check--on {
+  border-color: var(--color-success);
+  background-color: var(--color-success);
+  color: #ffffff;
+}
+
+.pm-select-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: -8px 0 12px;
+  line-height: 1.5;
 }
 
 .pm-item--alt {
@@ -257,6 +300,166 @@
   color: #0d9488;
   font-size: 12px;
   font-weight: 600;
+}
+
+.pm-amount-points {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.pm-amount-points s {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* ── Loyalty customer card ── */
+.pm-customer {
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pm-customer__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pm-customer__avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+  font-size: 16px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pm-customer__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pm-customer__info strong {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-customer__info span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.pm-customer__badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: #ccfbf1;
+  color: #0d9488;
+  flex-shrink: 0;
+}
+
+.pm-customer__use {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pm-customer__use input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  font-size: 13px;
+  outline: none;
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  -moz-appearance: textfield;
+}
+
+.pm-customer__use input::-webkit-inner-spin-button,
+.pm-customer__use input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.pm-customer__use input:focus { border-color: var(--color-accent); }
+
+.pm-customer__max {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-page);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pm-customer__max:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+.pm-customer__apply {
+  padding: 8px 14px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.pm-customer__apply:hover { background: var(--color-accent-hover); }
+
+.pm-customer__applied {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-input);
+  background: var(--color-success-light);
+  font-size: 13px;
+  color: #15803d;
+}
+
+.pm-customer__applied strong { margin-left: auto; font-weight: 800; }
+
+.pm-customer__applied button {
+  border: none;
+  background: none;
+  color: #15803d;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.pm-customer__applied button:hover { color: var(--color-danger); }
+
+.pm-customer__hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0;
 }
 
 /* Payment methods */
@@ -575,10 +778,10 @@
   flex-shrink: 0;
 }
 
-/* ── Mode tabs (Tek / Eşit Böl / Tutar Gir / Ürün Ürün) ─────────── */
+/* ── Mode tabs (Tek / Eşit Böl / Tutar Gir) ─────────────────────── */
 .pm-mode-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin: 12px 0;
 }
@@ -804,67 +1007,45 @@
   margin-top: 4px;
 }
 
-/* ── Item mode ── */
-.pm-item-list {
+/* ── Selection panel (items picked from the left summary) ── */
+.pm-sel-summary {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.pm-item-pick {
-  display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
   background: var(--color-bg-card, #fff);
   border-radius: 10px;
-  cursor: pointer;
-  transition: background 0.15s;
 }
 
-.pm-item-pick:hover { background: var(--color-bg-page, #f5f5f0); }
-
-.pm-item-pick--on {
-  background: var(--color-success-light, #dcfce7);
-  outline: 1px solid var(--color-success, #22c55e);
-}
-
-.pm-item-pick__check {
-  font-size: 18px;
-  color: var(--color-success, #22c55e);
-}
-
-.pm-item-pick__main {
+.pm-sel-summary__info {
   flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
-.pm-item-pick__main strong {
-  font-size: 13px;
-  color: var(--color-text-primary, #1a1a2e);
-  font-weight: 700;
-}
-
-.pm-item-pick__note {
-  font-size: 11px;
+.pm-sel-summary__info strong {
+  font-size: 14px;
+  font-weight: 800;
   color: var(--color-success, #22c55e);
-  font-weight: 700;
 }
 
-.pm-item-pick__price {
+.pm-sel-summary__info span {
   font-size: 11px;
   color: var(--color-text-secondary, #6b7280);
+  line-height: 1.5;
 }
 
-.pm-item-pick__total {
-  font-size: 13px;
+.pm-sel-summary__clear {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-danger-light, #fee2e2);
+  color: var(--color-danger, #ef4444);
+  font-size: 11px;
   font-weight: 800;
-  color: var(--color-accent, #e8975a);
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 /* ── Commit summary ── */
@@ -893,3 +1074,68 @@
 .pm-commit-summary__error {
   color: var(--color-danger, #ef4444) !important;
 }
+
+/* ── Paid items (partial payment in progress) ── */
+.pm-item--paid {
+  opacity: 0.5;
+}
+
+.pm-item--paid .pm-item__name,
+.pm-item--paid .pm-item__total {
+  text-decoration: line-through;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.pm-totals__row--paid span {
+  color: var(--color-success, #22c55e);
+  font-weight: 700;
+}
+
+/* ── Partial-quantity selection (item split payments) ── */
+.pm-item__qtysel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pm-item__qtysel button {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: var(--radius-input, 6px);
+  background: var(--color-bg-card, #ffffff);
+  color: var(--color-text-primary, #1a1a2e);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pm-item__qtysel button:hover {
+  background: var(--color-accent-light, #fdf0e8);
+  border-color: var(--color-accent, #e8975a);
+}
+
+.pm-item__qtysel span {
+  min-width: 40px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-accent, #e8975a);
+}
+
+.pm-item__reserved {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-success, #22c55e);
+}
+
+/* Fully reserved into a pending part — locked until the part is removed */
+.pm-item--reserved {
+  opacity: 0.65;
+  cursor: default;
+}
+

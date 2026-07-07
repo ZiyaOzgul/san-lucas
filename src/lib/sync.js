@@ -11,10 +11,14 @@ import {
   getUnsyncedCategories, markCategorySynced,
   getUnsyncedProducts,   markProductSynced,
   getUnsyncedOrders,     markOrderSynced,
-  getUnsyncedOrderItems, markOrderItemSynced,
+  getUnsyncedOrderItems,
   upsertCategoryFromRemote, upsertProductFromRemote, upsertIngredientFromRemote,
   upsertModifierFromRemote, upsertProductModifierExcludeFromRemote,
-  getAllIngredients, upsertIngredient, markIngredientSynced,
+  upsertVariantFromRemote,
+  reconcileRemoteDeletions,
+  getActiveRemoteOrders, upsertPaymentFromRemote, upsertPaymentItemFromRemote,
+  mirrorRemoteOrderStatus,
+  getAllIngredients, markIngredientSynced,
   getUnsyncedVariants, markVariantSynced,
   getUnsyncedModifiers, markModifierSynced,
   getUnsyncedProductModifierExcludes, markProductModifierExcludeSynced,
@@ -65,7 +69,7 @@ export async function syncToSupabase(log = null) {
   // ── Pending deletes ────────────────────────────────────────────
   const pendingDeletes = getPendingDeletes()
   for (const pd of pendingDeletes) {
-    const tableMap = { product: 'products', category: 'categories', ingredient: 'ingredients', modifier: 'modifiers' }
+    const tableMap = { product: 'products', category: 'categories', ingredient: 'ingredients', modifier: 'modifiers', variant: 'product_variants' }
     const table = tableMap[pd.entity_type]
     if (!table) { await clearPendingDelete(pd.id); continue }
     const { error } = await supabase.from(table).delete().eq('id', pd.remote_id)
@@ -91,11 +95,11 @@ export async function syncToSupabase(log = null) {
 
   // ── Categories ─────────────────────────────────────────────────
   const cats = getUnsyncedCategories()
-  for (const [id, name, color, icon, image_url] of cats) {
+  for (const [id, name, color, icon, image_url, remoteId] of cats) {
     let supabaseCatImageUrl = image_url
-    if (image_url && image_url.startsWith('/products/')) {
+    if (image_url && (image_url.startsWith('app-image://local/') || image_url.startsWith('/products/'))) {
       try {
-        const filename = image_url.replace('/products/', '')
+        const filename = image_url.split('/').pop()
         const bytes = await window.electronAPI?.images?.readFileBytes(image_url)
         if (bytes) {
           supabaseCatImageUrl = await uploadCategoryImage(bytes, filename)
@@ -106,11 +110,32 @@ export async function syncToSupabase(log = null) {
         supabaseCatImageUrl = null
       }
     }
-    const { data, error } = await supabase
-      .from('categories')
-      .upsert({ local_id: String(id), name, color, icon, image_url: supabaseCatImageUrl ?? null }, { onConflict: 'local_id' })
-      .select('id')
-      .single()
+    const catPayload = { name, color, icon, image_url: supabaseCatImageUrl ?? null }
+    let data, error
+    if (remoteId) {
+      // Category already exists in Supabase — UPDATE by remote id so rows
+      // pulled from another device never fork into duplicates on edit
+      ;({ data, error } = await supabase
+        .from('categories')
+        .update(catPayload)
+        .eq('id', Number(remoteId))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        // Remote row was deleted elsewhere — recreate it via local_id upsert
+        ;({ data, error } = await supabase
+          .from('categories')
+          .upsert({ local_id: String(id), ...catPayload }, { onConflict: 'local_id' })
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('categories')
+        .upsert({ local_id: String(id), ...catPayload }, { onConflict: 'local_id' })
+        .select('id')
+        .single())
+    }
 
     if (!error && data) {
       await markCategorySynced(id, data.id)
@@ -127,14 +152,32 @@ export async function syncToSupabase(log = null) {
   const allIngredients = getAllIngredients()
   const unsyncedIngredients = allIngredients.filter(i => !i.is_synced)
   for (const ing of unsyncedIngredients) {
-    const { data, error } = await supabase
-      .from('ingredients')
-      .upsert(
-        { local_id: String(ing.id), name: ing.name, unit: ing.unit, stock_amount: ing.stockAmount, min_stock_alert: ing.minStockAlert, container_name: ing.containerName ?? null, container_size: ing.containerSize ?? 0, image_url: ing.imageUrl ?? null },
-        { onConflict: 'local_id' }
-      )
-      .select('id')
-      .single()
+    const ingPayload = { name: ing.name, unit: ing.unit, stock_amount: ing.stockAmount, min_stock_alert: ing.minStockAlert, container_name: ing.containerName ?? null, container_size: ing.containerSize ?? 0, image_url: ing.imageUrl ?? null }
+    let data, error
+    if (ing.remote_id) {
+      // Ingredient already exists in Supabase — UPDATE by remote id. Critical:
+      // consumeIngredients flags pulled rows unsynced on every sale, and the
+      // old local_id upsert re-inserted them as duplicates each time.
+      ;({ data, error } = await supabase
+        .from('ingredients')
+        .update(ingPayload)
+        .eq('id', Number(ing.remote_id))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        ;({ data, error } = await supabase
+          .from('ingredients')
+          .upsert({ local_id: String(ing.id), ...ingPayload }, { onConflict: 'local_id' })
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('ingredients')
+        .upsert({ local_id: String(ing.id), ...ingPayload }, { onConflict: 'local_id' })
+        .select('id')
+        .single())
+    }
 
     if (!error && data) {
       await markIngredientSynced(ing.id, data.id)
@@ -149,9 +192,9 @@ export async function syncToSupabase(log = null) {
   const prods = getUnsyncedProducts()
   for (const [id, name, price, stock, category_id, image_url, recipe, points_value, remoteId] of prods) {
     let supabaseImageUrl = image_url
-    if (image_url && image_url.startsWith('/products/')) {
+    if (image_url && (image_url.startsWith('app-image://local/') || image_url.startsWith('/products/'))) {
       try {
-        const filename = image_url.replace('/products/', '')
+        const filename = image_url.split('/').pop()
         const bytes = await window.electronAPI?.images?.readFileBytes(image_url)
         if (bytes) {
           supabaseImageUrl = await uploadProductImage(bytes, filename)
@@ -178,6 +221,17 @@ export async function syncToSupabase(log = null) {
         .eq('id', Number(remoteId))
         .select('id')
         .single())
+      if (error?.code === 'PGRST116') {
+        // Remote row was deleted elsewhere — recreate it via local_id upsert
+        ;({ data, error } = await supabase
+          .from('products')
+          .upsert(
+            { local_id: String(id), name, price, stock, category_id: remoteCatId ? Number(remoteCatId) : null, image_url: supabaseImageUrl, recipe, points_value: points_value ?? 0 },
+            { onConflict: 'local_id' }
+          )
+          .select('id')
+          .single())
+      }
     } else {
       // New product — upsert by local_id
       ;({ data, error } = await supabase
@@ -203,16 +257,36 @@ export async function syncToSupabase(log = null) {
 
   // ── Product Variants ───────────────────────────────────────────
   const variants = getUnsyncedVariants()
-  for (const [id, local_id, product_remote_id, name, price] of variants) {
+  for (const [id, remoteId, product_remote_id, name, price] of variants) {
     if (!product_remote_id) continue
-    const { data, error } = await supabase
-      .from('product_variants')
-      .upsert(
-        { local_id: String(local_id ?? id), product_id: Number(product_remote_id), name, price },
-        { onConflict: 'local_id' }
-      )
-      .select('id')
-      .single()
+    let data, error
+    if (remoteId) {
+      ;({ data, error } = await supabase
+        .from('product_variants')
+        .update({ product_id: Number(product_remote_id), name, price })
+        .eq('id', Number(remoteId))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        ;({ data, error } = await supabase
+          .from('product_variants')
+          .upsert(
+            { local_id: String(id), product_id: Number(product_remote_id), name, price },
+            { onConflict: 'local_id' }
+          )
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('product_variants')
+        .upsert(
+          { local_id: String(id), product_id: Number(product_remote_id), name, price },
+          { onConflict: 'local_id' }
+        )
+        .select('id')
+        .single())
+    }
     if (!error && data) {
       await markVariantSynced(id, data.id)
       synced.variants++
@@ -227,25 +301,41 @@ export async function syncToSupabase(log = null) {
   // constraint enforces). Skip rows whose parent isn't synced yet —
   // they'll be pushed on the next pass once the parent has a remote_id.
   const mods = getUnsyncedModifiers()
-  for (const [id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, _remote_id, category_remote_id, product_remote_id] of mods) {
+  for (const [id, local_id, category_id, product_id, name, price_delta, sort_order, is_active, mod_remote_id, category_remote_id, product_remote_id] of mods) {
     if (category_id != null && !category_remote_id) continue
     if (product_id  != null && !product_remote_id)  continue
-    const { data, error } = await supabase
-      .from('modifiers')
-      .upsert(
-        {
-          local_id,
-          category_id: category_remote_id ? Number(category_remote_id) : null,
-          product_id:  product_remote_id  ? Number(product_remote_id)  : null,
-          name,
-          price_delta,
-          sort_order,
-          is_active: !!is_active,
-        },
-        { onConflict: 'local_id' }
-      )
-      .select('id')
-      .single()
+    const modPayload = {
+      category_id: category_remote_id ? Number(category_remote_id) : null,
+      product_id:  product_remote_id  ? Number(product_remote_id)  : null,
+      name,
+      price_delta,
+      sort_order,
+      is_active: !!is_active,
+    }
+    let data, error
+    if (mod_remote_id) {
+      // Pulled modifiers carry a different local_id than the remote row —
+      // UPDATE by remote id so edits never fork into duplicates
+      ;({ data, error } = await supabase
+        .from('modifiers')
+        .update(modPayload)
+        .eq('id', Number(mod_remote_id))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        ;({ data, error } = await supabase
+          .from('modifiers')
+          .upsert({ local_id, ...modPayload }, { onConflict: 'local_id' })
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('modifiers')
+        .upsert({ local_id, ...modPayload }, { onConflict: 'local_id' })
+        .select('id')
+        .single())
+    }
     if (!error && data) {
       await markModifierSynced(id, data.id)
       ok(`[Sync] ✓ Modifier: "${name}" ₺${price_delta} (local:${id} → remote:${data.id})`)
@@ -281,15 +371,39 @@ export async function syncToSupabase(log = null) {
 
   // ── Orders ─────────────────────────────────────────────────────
   const orders = getUnsyncedOrders()
-  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name] of orders) {
-    const { data, error } = await supabase
-      .from('orders')
-      .upsert(
-        { local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name: waiter_name ?? null },
-        { onConflict: 'local_id' }
-      )
-      .select('id')
-      .single()
+  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, remoteId] of orders) {
+    // Active (materialized) orders have closed_at = '' locally — send null
+    const orderPayload = {
+      table_id, status,
+      payment_method: payment_method || null,
+      total, created_at,
+      closed_at: closed_at || null,
+      waiter_name: waiter_name ?? null,
+    }
+    let data, error
+    if (remoteId) {
+      // Order already exists in Supabase (QR order or previously-pushed
+      // partial-payment order) — UPDATE by remote id, never re-insert
+      ;({ data, error } = await supabase
+        .from('orders')
+        .update(orderPayload)
+        .eq('id', Number(remoteId))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        ;({ data, error } = await supabase
+          .from('orders')
+          .upsert({ local_id, ...orderPayload }, { onConflict: 'local_id' })
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('orders')
+        .upsert({ local_id, ...orderPayload }, { onConflict: 'local_id' })
+        .select('id')
+        .single())
+    }
 
     if (!error && data) {
       await markOrderSynced(id, data.id)
@@ -302,21 +416,40 @@ export async function syncToSupabase(log = null) {
 
   // ── Order items ────────────────────────────────────────────────
   const items = getUnsyncedOrderItems()
-  for (const [id, local_id, order_remote_id, quantity, unit_price, product_remote_id, variant_remote_id, note, added_at] of items) {
+  for (const [id, local_id, order_remote_id, quantity, unit_price, product_remote_id, variant_remote_id, note, added_at, item_remote_id] of items) {
     if (!order_remote_id) continue
 
-    const { data, error } = await supabase
-      .from('order_items')
-      .upsert(
-        { local_id, order_id: order_remote_id, quantity, unit_price,
-          product_id: product_remote_id ? Number(product_remote_id) : null,
-          variant_id: variant_remote_id ? Number(variant_remote_id) : null,
-          note: note ?? null,
-          added_at: added_at ?? null },
-        { onConflict: 'local_id' }
-      )
-      .select('id')
-      .single()
+    const itemPayload = {
+      order_id: order_remote_id, quantity, unit_price,
+      product_id: product_remote_id ? Number(product_remote_id) : null,
+      variant_id: variant_remote_id ? Number(variant_remote_id) : null,
+      note: note ?? null,
+      added_at: added_at ?? null,
+    }
+    let data, error
+    if (item_remote_id) {
+      // Item already exists remotely (QR item edited on desktop) — UPDATE by
+      // remote id; upserting by our local_id would fork a duplicate row
+      ;({ data, error } = await supabase
+        .from('order_items')
+        .update(itemPayload)
+        .eq('id', Number(item_remote_id))
+        .select('id')
+        .single())
+      if (error?.code === 'PGRST116') {
+        ;({ data, error } = await supabase
+          .from('order_items')
+          .upsert({ local_id, ...itemPayload }, { onConflict: 'local_id' })
+          .select('id')
+          .single())
+      }
+    } else {
+      ;({ data, error } = await supabase
+        .from('order_items')
+        .upsert({ local_id, ...itemPayload }, { onConflict: 'local_id' })
+        .select('id')
+        .single())
+    }
 
     if (!error && data) {
       await setOrderItemRemoteId(id, data.id)
@@ -446,8 +579,14 @@ export async function pullFromSupabase(log = null) {
       if (pendingCatIds.has(c.id)) continue
       await upsertCategoryFromRemote({ remoteId: c.id, name: c.name, color: c.color, icon: c.icon, imageUrl: c.image_url ?? null })
     }
+    const gone = reconcileRemoteDeletions('category', cats.map(c => c.id))
+    if (gone) ok(`[Sync] ↓ ${gone} kategori uzakta silinmişti — lokalden kaldırıldı`)
     await persistDb()
     ok(`[Sync] ↓ ${cats.length} kategori çekildi`)
+    // Warm the offline image cache in the background (fire-and-forget)
+    for (const c of cats) {
+      if (c.image_url?.startsWith('http')) window.electronAPI?.images?.cacheRemote(c.image_url)
+    }
   }
 
   // ── Pull ingredients ───────────────────────────────────────────
@@ -468,6 +607,8 @@ export async function pullFromSupabase(log = null) {
         minStockAlert: ing.min_stock_alert,
       })
     }
+    const gone = reconcileRemoteDeletions('ingredient', ings.map(i => i.id))
+    if (gone) ok(`[Sync] ↓ ${gone} malzeme uzakta silinmişti — lokalden kaldırıldı`)
     await persistDb()
     ok(`[Sync] ↓ ${ings.length} malzeme çekildi`)
   }
@@ -493,8 +634,43 @@ export async function pullFromSupabase(log = null) {
         pointsValue: p.points_value ?? 0,
       })
     }
+    // Also removes products deactivated remotely (pull filters is_active=true)
+    const gone = reconcileRemoteDeletions('product', prods.map(p => p.id))
+    if (gone) ok(`[Sync] ↓ ${gone} ürün uzakta silinmişti — lokalden kaldırıldı`)
     await persistDb()
     ok(`[Sync] ↓ ${prods.length} ürün çekildi`)
+    // Warm the offline image cache in the background (fire-and-forget)
+    for (const p of prods) {
+      if (p.image_url?.startsWith('http')) window.electronAPI?.images?.cacheRemote(p.image_url)
+    }
+  }
+
+  // ── Pull product variants ──────────────────────────────────────
+  // Must run after products (parent FK) and before modifiers so a fresh
+  // install receives the full menu incl. variant pricing in one pass.
+  const pendingVarIds = new Set(pendingDeletes.filter(p => p.entity_type === 'variant').map(p => p.remote_id))
+  const { data: vars, error: varErr } = await supabase
+    .from('product_variants')
+    .select('id, local_id, product_id, name, price')
+  if (varErr) {
+    err('[Sync] ✗ Varyantlar çekilemedi', varErr)
+  } else if (vars) {
+    let pulled = 0
+    for (const v of vars) {
+      if (pendingVarIds.has(v.id)) continue
+      const done = await upsertVariantFromRemote({
+        remoteId: v.id,
+        remoteProductId: v.product_id,
+        localId: v.local_id,
+        name: v.name,
+        price: v.price,
+      })
+      if (done) pulled++
+    }
+    const gone = reconcileRemoteDeletions('variant', vars.map(v => v.id))
+    if (gone) ok(`[Sync] ↓ ${gone} varyant uzakta silinmişti — lokalden kaldırıldı`)
+    await persistDb()
+    ok(`[Sync] ↓ ${pulled}/${vars.length} varyant çekildi`)
   }
 
   // ── Pull modifiers ─────────────────────────────────────────────
@@ -515,6 +691,8 @@ export async function pullFromSupabase(log = null) {
         isActive: m.is_active !== false,
       })
     }
+    const gone = reconcileRemoteDeletions('modifier', mods.map(m => m.id))
+    if (gone) ok(`[Sync] ↓ ${gone} modifier uzakta silinmişti — lokalden kaldırıldı`)
     await persistDb()
     ok(`[Sync] ↓ ${mods.length} modifier çekildi`)
   }
@@ -534,5 +712,73 @@ export async function pullFromSupabase(log = null) {
     }
     await persistDb()
     ok(`[Sync] ↓ ${exs.length} modifier-exclude çekildi`)
+  }
+
+  // ── Pull payments + order status for active shared orders ──────
+  // Split payments made on another device (mobile) attach to the same
+  // Supabase order — pull them so the desktop marks those items paid, and
+  // mirror orders that were completed/cancelled elsewhere.
+  const activeRemote = getActiveRemoteOrders()
+  if (activeRemote.length > 0) {
+    const remoteOrderIds = activeRemote.map(o => Number(o.remoteId))
+    const localByRemote = new Map(activeRemote.map(o => [String(o.remoteId), o.id]))
+
+    const { data: remoteOrders, error: roErr } = await supabase
+      .from('orders')
+      .select('id, status, payment_method, closed_at')
+      .in('id', remoteOrderIds)
+    if (roErr) {
+      err('[Sync] ✗ Aktif sipariş durumları çekilemedi', roErr)
+    } else if (remoteOrders) {
+      for (const ro of remoteOrders) {
+        if (ro.status && ro.status !== 'active' && ro.status !== 'pending') {
+          await mirrorRemoteOrderStatus(localByRemote.get(String(ro.id)), {
+            status: ro.status,
+            paymentMethod: ro.payment_method ?? null,
+            closedAt: ro.closed_at ?? null,
+          })
+          ok(`[Sync] ↓ Sipariş uzakta ${ro.status === 'completed' ? 'kapatılmış' : 'iptal edilmiş'} — yerelde de işaretlendi (remote:${ro.id})`)
+        }
+      }
+    }
+
+    const { data: pays, error: payErr } = await supabase
+      .from('payments')
+      .select('id, local_id, order_id, amount, payment_method, payer_label, processed_by, device, created_at')
+      .in('order_id', remoteOrderIds)
+    if (payErr) {
+      err('[Sync] ✗ Ödemeler çekilemedi', payErr)
+    } else if (pays && pays.length > 0) {
+      let added = 0
+      for (const p of pays) {
+        const localOrderId = localByRemote.get(String(p.order_id))
+        if (localOrderId == null) continue
+        const isNew = await upsertPaymentFromRemote({
+          remoteId: p.id,
+          localId: p.local_id ?? null,
+          localOrderId,
+          amount: p.amount,
+          paymentMethod: p.payment_method,
+          payerLabel: p.payer_label ?? null,
+          processedBy: p.processed_by ?? null,
+          device: p.device ?? 'remote',
+          createdAt: p.created_at ?? null,
+        })
+        if (isNew) added++
+      }
+      const { data: pis, error: piErr } = await supabase
+        .from('payment_items')
+        .select('payment_id, order_item_id')
+        .in('payment_id', pays.map(p => p.id))
+      if (piErr) {
+        err('[Sync] ✗ Ödeme-kalem eşleşmeleri çekilemedi', piErr)
+      } else {
+        for (const pi of (pis ?? [])) {
+          upsertPaymentItemFromRemote({ remotePaymentId: pi.payment_id, remoteOrderItemId: pi.order_item_id })
+        }
+      }
+      await persistDb()
+      if (added > 0) ok(`[Sync] ↓ ${added} ödeme çekildi (diğer cihazlardan)`)
+    }
   }
 }

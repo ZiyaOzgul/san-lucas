@@ -1,6 +1,66 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, protocol, net } = require('electron')
+const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs   = require('fs')
+
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app-image', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true, stream: true } },
+])
+
+const IMAGES_DIR = () => path.join(app.getPath('userData'), 'images')
+const LOCAL_DIR  = () => path.join(IMAGES_DIR(), 'local')
+const CACHE_DIR  = () => path.join(IMAGES_DIR(), 'cache')
+
+function imageFilename(ref) {
+  if (!ref) return null
+  try {
+    if (String(ref).startsWith('app-image://')) {
+      return path.basename(decodeURIComponent(new URL(ref).pathname))
+    }
+  } catch {}
+  return path.basename(String(ref))
+}
+
+function legacyProductPath(filename) {
+  return path.join(__dirname, '..', 'public', 'products', filename)
+}
+
+function checkForUpdates() {
+  if (!app.isPackaged) return
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    console.error('[auto-updater] check failed:', err)
+  })
+}
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) return
+
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Güncelleme Hazır',
+      message: `Yeni sürüm indirildi (v${info.version}). Şimdi yeniden başlatmak ister misiniz?`,
+      buttons: ['Şimdi Yeniden Başlat', 'Daha Sonra'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+
+    if (response === 0) {
+      autoUpdater.quitAndInstall()
+    }
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.error('[auto-updater] error:', err)
+  })
+
+  checkForUpdates()
+  setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL_MS)
+}
 
 function createWindow() {
   Menu.setApplicationMenu(null)
@@ -81,36 +141,96 @@ ipcMain.handle('images:pick', async (event) => {
 ipcMain.handle('images:save', async (_event, sourcePath) => {
   const ext = path.extname(sourcePath)
   const filename = `${Date.now()}${ext}`
-  const destDir = path.join(__dirname, '..', 'public', 'products')
+  const destDir = LOCAL_DIR()
   await fs.promises.mkdir(destDir, { recursive: true })
   await fs.promises.copyFile(sourcePath, path.join(destDir, filename))
-  return `/products/${filename}`
+  return `app-image://local/${filename}`
 })
 
-ipcMain.handle('images:delete', (_event, relativePath) => {
+ipcMain.handle('images:delete', (_event, ref) => {
   try {
-    const filename = path.basename(relativePath)
-    const dest = path.join(__dirname, '..', 'public', 'products', filename)
+    const filename = imageFilename(ref)
+    if (!filename || filename === '.' || filename === '..') return
+    const dest = path.join(LOCAL_DIR(), filename)
     if (fs.existsSync(dest)) fs.unlinkSync(dest)
   } catch (err) {
     console.error('[images:delete] failed:', err)
   }
 })
 
-ipcMain.handle('images:readFileBytes', (_event, relativePath) => {
+ipcMain.handle('images:readFileBytes', (_event, ref) => {
   try {
-    const filename = path.basename(relativePath)
-    const filePath = path.join(__dirname, '..', 'public', 'products', filename)
-    const buf = fs.readFileSync(filePath)
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+    const filename = imageFilename(ref)
+    if (!filename || filename === '.' || filename === '..') return null
+    const candidates = [
+      path.join(LOCAL_DIR(), filename),
+      legacyProductPath(filename),
+    ]
+    for (const filePath of candidates) {
+      if (!fs.existsSync(filePath)) continue
+      const buf = fs.readFileSync(filePath)
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+    }
+    return null
   } catch (err) {
     console.error('[images:readFileBytes] failed:', err)
     return null
   }
 })
 
+ipcMain.handle('images:cacheRemote', async (_event, httpsUrl) => {
+  try {
+    const u = new URL(httpsUrl)
+    if (u.protocol !== 'https:') return null
+    const filename = path.basename(decodeURIComponent(u.pathname))
+    if (!filename || filename === '.' || filename === '..') return null
+    await fs.promises.mkdir(CACHE_DIR(), { recursive: true })
+    const dest = path.join(CACHE_DIR(), filename)
+    if (!fs.existsSync(dest)) {
+      const res = await net.fetch(httpsUrl)
+      if (!res.ok) return null
+      const bytes = Buffer.from(await res.arrayBuffer())
+      await fs.promises.writeFile(dest, bytes)
+    }
+    return `app-image://cache/${filename}`
+  } catch {
+    return null
+  }
+})
+
+ipcMain.handle('images:migrateLegacy', async (_event, filename) => {
+  try {
+    const safeName = path.basename(String(filename || ''))
+    if (!safeName || safeName === '.' || safeName === '..') return false
+    const dest = path.join(LOCAL_DIR(), safeName)
+    if (fs.existsSync(dest)) return true
+    const src = legacyProductPath(safeName)
+    if (!fs.existsSync(src)) return false
+    await fs.promises.mkdir(LOCAL_DIR(), { recursive: true })
+    await fs.promises.copyFile(src, dest)
+    return true
+  } catch {
+    return false
+  }
+})
+
 app.whenReady().then(() => {
+  protocol.handle('app-image', async (request) => {
+    try {
+      const u = new URL(request.url)
+      const bucket = u.hostname === 'cache' ? CACHE_DIR() : LOCAL_DIR()
+      const filename = path.basename(decodeURIComponent(u.pathname))
+      if (!filename || filename === '.' || filename === '..') return new Response(null, { status: 400 })
+      const filePath = path.join(bucket, filename)
+      if (!filePath.startsWith(bucket)) return new Response(null, { status: 403 })
+      return net.fetch('file://' + filePath.replace(/\\/g, '/'))
+    } catch {
+      return new Response(null, { status: 404 })
+    }
+  })
+
   createWindow()
+  setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

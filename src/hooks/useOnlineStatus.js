@@ -4,7 +4,7 @@ import { supabase, isSupabaseReady } from '../lib/supabase.js'
 function useOnlineStatus({ onReconnect } = {}) {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const onReconnectRef = useRef(onReconnect)
-  onReconnectRef.current = onReconnect
+  useEffect(() => { onReconnectRef.current = onReconnect }) // latest-ref pattern
 
   useEffect(() => {
     console.log(`[Online] hook init — navigator.onLine=${navigator.onLine}, supabaseReady=${isSupabaseReady}`)

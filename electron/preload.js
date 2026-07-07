@@ -15,5 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     readFileBytes: (relativePath) => ipcRenderer.invoke('images:readFileBytes', relativePath),
     deleteFile:    (relativePath) => ipcRenderer.invoke('images:delete', relativePath),
+    cacheRemote:   (httpsUrl) => ipcRenderer.invoke('images:cacheRemote', httpsUrl),
+    migrateLegacy: (filename) => ipcRenderer.invoke('images:migrateLegacy', filename),
   },
 })

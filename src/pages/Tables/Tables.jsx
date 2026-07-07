@@ -1,6 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
-import { saveCompletedOrder, getDailyRevenue, isDbInitialized } from '../../lib/localDb.js'
+import {
+  saveCompletedOrder, getDailyRevenue, isDbInitialized,
+  ensurePersistedActiveOrder, getPaidItemIds, getOrderTotalPaid,
+  setOrderStatus, consumeIngredients, moveOrderToTable, completeActiveOrder,
+  getAllActiveOrders, deleteActiveOrderCascade,
+} from '../../lib/localDb.js'
+import { addPayments } from '../../lib/orderOperations.js'
 import { supabase, isSupabaseReady } from '../../lib/supabase.js'
 import { playAlertSound } from '../../lib/alertSound.js'
 import TableCard from '../../components/TableCard/TableCard.jsx'
@@ -14,10 +20,19 @@ function getLiveTime() {
   return new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
 }
 
+function modSum(modifiers) {
+  if (!modifiers?.length) return 0
+  return modifiers.reduce((s, m) => s + (Number(m.priceDelta) || 0) * (Number(m.quantity) || 1), 0)
+}
+
+function groupSubtotal(items) {
+  return (items ?? []).reduce((s, i) => s + i.qty * (i.unitPrice + modSum(i.modifiers)), 0)
+}
+
 function Tables() {
-  const { tableDefs, triggerSync, isOnline, kdvRate, kdvEnabled, runtimeStates, setRuntimeStates, currentUser, logoutUser } = useApp()
-  const effectiveTaxRate = kdvEnabled ? kdvRate / 100 : 0
+  const { tableDefs, triggerSync, isOnline, runtimeStates, setRuntimeStates, currentUser, logoutUser } = useApp()
   const [clock,          setClock]          = useState(getLiveTime)
+  const [nowTs,          setNowTs]          = useState(() => Date.now())
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [paymentTable,   setPaymentTable]   = useState(null)
   const [paymentOrder,   setPaymentOrder]   = useState(null)
@@ -25,7 +40,7 @@ function Tables() {
   const [qrQueue,        setQrQueue]        = useState([])
   const [profileOpen,    setProfileOpen]    = useState(false)
   const [tableFilter,    setTableFilter]    = useState('all') // 'all' | 'open'
-  const [dailyRevenue,   setDailyRevenue]   = useState(0)
+  const [dailyRevenue,   setDailyRevenue]   = useState(() => isDbInitialized() ? getDailyRevenue() : 0)
   const [lowStockAlerts, setLowStockAlerts] = useState([])
 
   const refreshRevenue = useCallback(() => {
@@ -33,11 +48,7 @@ function Tables() {
   }, [])
 
   useEffect(() => {
-    refreshRevenue()
-  }, [refreshRevenue])
-
-  useEffect(() => {
-    const timer = setInterval(() => setClock(getLiveTime()), 1000)
+    const timer = setInterval(() => { setClock(getLiveTime()); setNowTs(Date.now()) }, 1000)
     return () => clearInterval(timer)
   }, [])
 
@@ -109,7 +120,8 @@ function Tables() {
           }
 
           console.log('[QR-DEBUG] Pushing to qrQueue:', { tableId: newOrder.table_id, orderId: newOrder.id, itemCount: orderItems.length })
-          setQrQueue(prev => [...prev, {
+          // Realtime can re-deliver on reconnect — never queue the same order twice
+          setQrQueue(prev => prev.some(q => q.orderId === newOrder.id) ? prev : [...prev, {
             tableId:    newOrder.table_id,
             orderId:    newOrder.id,
             openMinutes,
@@ -128,30 +140,22 @@ function Tables() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [setRuntimeStates])
 
-  // Auto-open QR approval modal when a new QR order arrives
-  useEffect(() => {
-    if (qrTable) { console.log('[QR-DEBUG] auto-open skipped: modal already open'); return }
-    if (qrQueue.length === 0) return
+  // Auto-open QR approval modal when a new QR order arrives.
+  // Adjust-during-render (guarded) instead of a setState-in-effect.
+  if (!qrTable && qrQueue.length > 0) {
     const next = qrQueue[0]
     const def = tableDefs.find(t => t.id === Number(next.tableId))
-    console.log('[QR-DEBUG] auto-open useEffect ran', {
-      queueLen: qrQueue.length,
-      nextTableId: next.tableId,
-      tableDefsIds: tableDefs.map(t => t.id),
-      defFound: !!def,
-    })
     if (def) setQrTable({ ...def, ...next })
-    else console.warn('[QR-DEBUG] No matching tableDef for tableId', next.tableId)
-  }, [qrQueue, tableDefs]) // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   // Merge tableDefs with runtime states — new tables from Settings appear as empty
   const displayTables = tableDefs.map(def => {
     const state = runtimeStates[def.id] ?? { status: 'empty' }
     const orderItems = (state.orders ?? []).flatMap(o => o.items)
     const openMinutes = state.openedAt
-      ? Math.max(0, Math.floor((Date.now() - new Date(state.openedAt).getTime()) / 60000))
+      ? Math.max(0, Math.floor((nowTs - new Date(state.openedAt).getTime()) / 60000))
       : 0
     return { ...def, ...state, orderItems, openMinutes }
   })
@@ -211,7 +215,6 @@ function Tables() {
             openedAt: new Date().toISOString(),
             openMinutes: 0,
             waiter: '—',
-            taxRate: effectiveTaxRate,
             orders: [{ localId: crypto.randomUUID(), label: 'Sipariş 1', supabaseOrderId: null, items: [newItem] }],
           },
         }
@@ -246,7 +249,7 @@ function Tables() {
       if (!existing) return prev
       const newOrders = (existing.orders ?? []).map(o => {
         if (subOrderLocalId && o.localId !== subOrderLocalId) return o
-        return { ...o, items: o.items.map(i => i.id === itemId ? { ...i, modifiers: Array.isArray(modifiers) ? modifiers : [] } : i) }
+        return { ...o, items: o.items.map(i => (i.id === itemId && !i.paid) ? { ...i, modifiers: Array.isArray(modifiers) ? modifiers : [] } : i) }
       })
       return { ...prev, [tableId]: { ...existing, orders: newOrders } }
     })
@@ -254,6 +257,13 @@ function Tables() {
 
   // Move the whole order group from one table to another (empty) table.
   const handleMoveOrderToTable = (fromTableId, subOrderLocalId, toTableId) => {
+    // Keep the materialized order (if any) pointing at the new table
+    const movingGroup = (runtimeStates[fromTableId]?.orders ?? []).find(o => o.localId === subOrderLocalId)
+    if (movingGroup?.persistedOrderId) {
+      const toName = tableDefs.find(t => t.id === toTableId)?.name ?? ''
+      moveOrderToTable(movingGroup.persistedOrderId, toTableId, toName)
+        .catch(e => console.warn('[Tables] persisted order move failed', e))
+    }
     setRuntimeStates(prev => {
       const fromState = prev[fromTableId]
       if (!fromState) return prev
@@ -273,7 +283,6 @@ function Tables() {
           openedAt: new Date().toISOString(),
           openMinutes: 0,
           waiter: '—',
-          taxRate: effectiveTaxRate,
           orders: [group],
         }
       } else {
@@ -290,6 +299,11 @@ function Tables() {
   // Move selected items from one order group into another table's active group.
   const handleMoveItemsToTable = (fromTableId, subOrderLocalId, itemIds, toTableId, toSubOrderLocalId = null) => {
     if (!itemIds || itemIds.length === 0) return
+    // Paid items stay where their payment was recorded
+    const srcGroup = (runtimeStates[fromTableId]?.orders ?? []).find(o => o.localId === subOrderLocalId)
+    const paidIds = new Set((srcGroup?.items ?? []).filter(i => i.paid).map(i => i.id))
+    itemIds = itemIds.filter(id => !paidIds.has(id))
+    if (itemIds.length === 0) return
     const idSet = new Set(itemIds)
     setRuntimeStates(prev => {
       const fromState = prev[fromTableId]
@@ -316,7 +330,6 @@ function Tables() {
         openedAt: new Date().toISOString(),
         openMinutes: 0,
         waiter: '—',
-        taxRate: effectiveTaxRate,
         orders: [],
       }
       const toOrders = toState.orders ?? []
@@ -354,20 +367,39 @@ function Tables() {
       if (!existing) return prev
       const newOrders = (existing.orders ?? []).map(o => {
         if (subOrderLocalId && o.localId !== subOrderLocalId) return o
-        return { ...o, items: o.items.map(i => i.id === itemId ? { ...i, qty: newQty } : i) }
+        return { ...o, items: o.items.map(i => (i.id === itemId && !i.paid) ? { ...i, qty: newQty } : i) }
       })
       return { ...prev, [tableId]: { ...existing, orders: newOrders } }
     })
   }
 
   const handleRemoveItem = (tableId, itemId, subOrderLocalId) => {
+    // Paid items are financially committed — never removable
+    const state = runtimeStates[tableId]
+    const group = (state?.orders ?? []).find(o =>
+      subOrderLocalId ? o.localId === subOrderLocalId : o.items.some(i => i.id === itemId))
+    const target = group?.items.find(i => i.id === itemId)
+    if (target?.paid) return
+
+    // If this empties a group that was materialized for partial payment:
+    // block when money was already taken (would orphan the payments),
+    // otherwise cancel the persisted order so it doesn't resurrect on restart.
+    if (group?.persistedOrderId) {
+      const remaining = group.items.filter(i => i.id !== itemId)
+      if (remaining.length === 0) {
+        if ((group.paidAmount ?? 0) > 0) return
+        setOrderStatus(group.persistedOrderId, 'cancelled')
+          .catch(e => console.warn('[Tables] persisted order cancel failed', e))
+      }
+    }
+
     setRuntimeStates(prev => {
       const existing = prev[tableId]
       if (!existing) return prev
       const newOrders = (existing.orders ?? [])
         .map(o => {
           if (subOrderLocalId && o.localId !== subOrderLocalId) return o
-          return { ...o, items: o.items.filter(i => i.id !== itemId) }
+          return { ...o, items: o.items.filter(i => i.id !== itemId || i.paid) }
         })
         .filter(o => o.items.length > 0)
       if (newOrders.length === 0) {
@@ -380,69 +412,314 @@ function Tables() {
   }
 
   // ── Payment / QR ────────────────────────────────────────────────
-  const handlePaymentComplete = async (transactionData) => {
-    setRuntimeStates(prev => {
-      const next = { ...prev }
-      delete next[transactionData.tableId]
-      return next
-    })
+  // Single entry point for both modals. scopeGroupLocalId = null → whole
+  // table (Masayı Kapat), otherwise the sub-order group being paid.
+  //
+  // Fast path (unchanged behavior): full payment with no prior partial
+  // payments → saveCompletedOrder + clear the table/group.
+  //
+  // Materialized path: any partial payment persists the group(s) as active
+  // orders in sql.js, records payments via addPayments and keeps the table
+  // OPEN with the covered items marked paid. The table/group only closes
+  // once everything is paid.
+  const applyPaymentTx = async (transactionData, scopeGroupLocalId) => {
+    const tableId = transactionData.tableId
+    const state = runtimeStates[tableId]
+    const groups = scopeGroupLocalId
+      ? (state?.orders ?? []).filter(o => o.localId === scopeGroupLocalId)
+      : (state?.orders ?? [])
+    const hasPersisted = groups.some(g => g.persistedOrderId)
+
     setPaymentTable(null)
-    setSelectedTableId(null)
-    try {
-      const { lowStockWarnings } = await saveCompletedOrder(transactionData)
-      refreshRevenue()
-      if (lowStockWarnings?.length) setLowStockAlerts(lowStockWarnings)
-      console.log(`[Tables] ✓ Order completed — Masa ${transactionData.tableId} | ₺${transactionData.total?.toFixed(2)} | ${transactionData.paymentMethod}`)
-      if (transactionData.supabaseOrderId && isSupabaseReady) {
-        await supabase
-          .from('orders')
-          .update({ status: 'completed', payment_method: transactionData.paymentMethod, total: transactionData.total, closed_at: transactionData.closedAt })
-          .eq('id', transactionData.supabaseOrderId)
+    setPaymentOrder(null)
+
+    if (transactionData.isFullPayment && !hasPersisted) {
+      // ── Fast path ──
+      setRuntimeStates(prev => {
+        const existing = prev[tableId]
+        if (!existing) return prev
+        const newOrders = scopeGroupLocalId
+          ? (existing.orders ?? []).filter(o => o.localId !== scopeGroupLocalId)
+          : []
+        if (newOrders.length === 0) {
+          const next = { ...prev }
+          delete next[tableId]
+          return next
+        }
+        return { ...prev, [tableId]: { ...existing, orders: newOrders } }
+      })
+      if (!scopeGroupLocalId) setSelectedTableId(null)
+      try {
+        const { lowStockWarnings } = await saveCompletedOrder(transactionData)
+        // The debounced persister may have materialized these groups as ACTIVE
+        // local orders. Remove them now — otherwise the ghost-cleanup pass in
+        // AppContext flips the remote QR orders we're about to mark completed
+        // back to 'cancelled', and the customer loses the loyalty points the
+        // completion trigger just awarded.
+        try {
+          const closedGroupIds = new Set(groups.map(g => String(g.localId)))
+          for (const o of getAllActiveOrders()) {
+            if (closedGroupIds.has(String(o.local_id))) await deleteActiveOrderCascade(o.id)
+          }
+        } catch (e) {
+          console.warn('[Tables] ghost active-order cleanup failed', e)
+        }
+        refreshRevenue()
+        if (lowStockWarnings?.length) setLowStockAlerts(lowStockWarnings)
+        console.log(`[Tables] ✓ Order completed — Masa ${tableId} | ₺${transactionData.total?.toFixed(2)} | ${transactionData.paymentMethod}`)
+        if (transactionData.supabaseOrderId && isSupabaseReady) {
+          await supabase
+            .from('orders')
+            .update({ status: 'completed', payment_method: transactionData.paymentMethod, total: transactionData.total, closed_at: transactionData.closedAt })
+            .eq('id', transactionData.supabaseOrderId)
+        }
+        // Whole-table close: QR sub-orders live as their own rows in Supabase —
+        // flip them too, otherwise they stay 'active' and reappear on mobile
+        if (isSupabaseReady) {
+          const remoteGroupIds = groups
+            .map(g => g.supabaseOrderId)
+            .filter(rid => rid != null && rid !== transactionData.supabaseOrderId)
+          for (const rid of remoteGroupIds) {
+            await supabase
+              .from('orders')
+              .update({ status: 'completed', payment_method: transactionData.paymentMethod, closed_at: transactionData.closedAt })
+              .eq('id', rid)
+          }
+        }
+        if (isOnline) triggerSync()
+      } catch (e) {
+        console.error('[Tables] Failed to save order to DB', e)
       }
+      return
+    }
+
+    // ── Materialized path (partial payment, or closing an order that already
+    //    has partial payments) ──
+    if (groups.length === 0) return
+    try {
+      const discount = transactionData.discount ?? 0
+
+      // 0. Partial-quantity rows: payment_items marks a whole order_item as
+      // paid, so a row covering only part of a line's quantity first splits
+      // the runtime item — the paid portion becomes its own line (and its
+      // own db row via ensurePersistedActiveOrder below). Rows are cloned so
+      // the id remap never leaks back into transactionData.
+      const paymentRows = (transactionData.paymentRows ?? []).map(r => ({
+        ...r,
+        order_item_ids: r.order_item_ids ? [...r.order_item_ids] : r.order_item_ids,
+        item_amounts: r.item_amounts ? { ...r.item_amounts } : r.item_amounts,
+      }))
+      const workGroups = groups.map(g => ({ ...g, items: g.items.map(i => ({ ...i })) }))
+      {
+        const byId = new Map()
+        workGroups.forEach(g => g.items.forEach(i => byId.set(String(i.id), { g, i })))
+        for (const row of paymentRows) {
+          if (!row.order_item_ids?.length || !row.item_qtys) continue
+          row.order_item_ids = row.order_item_ids.map(iid => {
+            const hit = byId.get(String(iid))
+            const payQty = Math.floor(Number(row.item_qtys[iid]) || 0)
+            if (!hit || hit.i.paid || payQty <= 0 || payQty >= hit.i.qty) return iid
+            const split = { ...hit.i, id: crypto.randomUUID(), qty: payQty }
+            hit.i.qty -= payQty
+            hit.g.items.splice(hit.g.items.indexOf(hit.i) + 1, 0, split)
+            byId.set(String(split.id), { g: hit.g, i: split })
+            if (row.item_amounts?.[iid] != null) {
+              row.item_amounts[split.id] = row.item_amounts[iid]
+              delete row.item_amounts[iid]
+            }
+            return split.id
+          })
+        }
+      }
+      const allSub = workGroups.reduce((s, g) => s + groupSubtotal(g.items), 0)
+
+      // 1. Persist each involved group as an active order
+      const infos = []
+      for (const g of workGroups) {
+        const gSub = groupSubtotal(g.items)
+        const gDiscount = allSub > 0 ? discount * (gSub / allSub) : 0
+        const gTotal = Math.round((gSub - gDiscount) * 100) / 100
+        const info = await ensurePersistedActiveOrder({
+          tableId,
+          tableName: transactionData.tableName,
+          waiterName: transactionData.waiterName ?? state?.waiter ?? null,
+          groupLocalId: g.localId,
+          supabaseOrderId: g.supabaseOrderId ?? null,
+          items: g.items,
+          total: gTotal,
+        })
+        infos.push({ group: g, gTotal, ...info })
+      }
+
+      // 2. Split the modal's payment rows across the involved groups.
+      // Item rows follow their items; amount-only rows fill remaining
+      // balances in group order.
+      const groupOfItem = new Map()
+      workGroups.forEach(g => g.items.forEach(i => groupOfItem.set(String(i.id), g.localId)))
+      const rowsByGroup = new Map(infos.map(i => [i.group.localId, []]))
+      const remainingByGroup = new Map(infos.map(i => [
+        i.group.localId,
+        Math.max(0, i.gTotal - getOrderTotalPaid(i.orderId)),
+      ]))
+
+      for (const row of paymentRows) {
+        if (row.order_item_ids?.length) {
+          const idsByGroup = new Map()
+          for (const itemId of row.order_item_ids) {
+            const gid = groupOfItem.get(String(itemId)) ?? infos[0].group.localId
+            if (!idsByGroup.has(gid)) idsByGroup.set(gid, [])
+            idsByGroup.get(gid).push(itemId)
+          }
+          const entries = [...idsByGroup.entries()]
+          let allocated = 0
+          entries.forEach(([gid, ids], idx) => {
+            let amount
+            if (entries.length === 1) {
+              amount = Number(row.amount)
+            } else if (idx === entries.length - 1) {
+              amount = Math.round((Number(row.amount) - allocated) * 100) / 100
+            } else {
+              amount = Math.round(ids.reduce((s, iid) => s + (Number(row.item_amounts?.[iid]) || 0), 0) * 100) / 100
+              allocated += amount
+            }
+            rowsByGroup.get(gid)?.push({ ...row, amount, order_item_ids: ids })
+            remainingByGroup.set(gid, Math.max(0, (remainingByGroup.get(gid) ?? 0) - amount))
+          })
+        } else {
+          // Amount-only row (Eşit Böl / Tutar Gir / Tek) — waterfall across groups
+          let left = Number(row.amount)
+          for (const info of infos) {
+            if (left <= 0.001) break
+            const gid = info.group.localId
+            const rem = remainingByGroup.get(gid) ?? 0
+            const isLast = info === infos[infos.length - 1]
+            const take = isLast ? left : Math.min(left, rem)
+            if (take <= 0.001) continue
+            const amount = Math.round(take * 100) / 100
+            rowsByGroup.get(gid)?.push({ ...row, amount, order_item_ids: undefined })
+            remainingByGroup.set(gid, Math.max(0, rem - amount))
+            left = Math.round((left - amount) * 100) / 100
+          }
+        }
+      }
+
+      // 3. Record payments per group and decide which groups close
+      const coveredByGroup = new Map()
+      for (const info of infos) {
+        const rows = rowsByGroup.get(info.group.localId) ?? []
+        const paidSet = getPaidItemIds(info.orderId)
+        const mappedRows = rows
+          .map(r => ({
+            amount: r.amount,
+            payment_method: r.payment_method,
+            payer_label: r.payer_label ?? null,
+            order_item_ids: (r.order_item_ids ?? [])
+              .map(iid => info.itemIdMap[iid])
+              .filter(dbId => dbId != null && !paidSet.has(dbId)),
+          }))
+          .filter(r => Number(r.amount) > 0)
+        info.completed = false
+        info.paidNow = getOrderTotalPaid(info.orderId)
+        if (mappedRows.length) {
+          const payRes = await addPayments({
+            orderLocalId: info.orderId,
+            orderRemoteId: info.remoteId ? Number(info.remoteId) : null,
+            tableId,
+            total: info.gTotal,
+            processedBy: transactionData.waiterName ?? null,
+            rows: mappedRows,
+          })
+          info.completed = payRes.completed
+          info.paidNow = payRes.paid
+        }
+        coveredByGroup.set(
+          info.group.localId,
+          new Set(rows.flatMap(r => (r.order_item_ids ?? []).map(String)))
+        )
+      }
+
+      // isFullPayment closes everything in scope even if per-group rounding
+      // left a cent behind
+      const lowStock = []
+      let anyClosed = false
+      for (const info of infos) {
+        const close = transactionData.isFullPayment || info.completed
+        info.close = close
+        if (!close) continue
+        anyClosed = true
+        const gSub = groupSubtotal(info.group.items)
+        await completeActiveOrder(info.orderId, {
+          subtotal: gSub,
+          tax: 0,
+          discount: allSub > 0 ? Math.round(discount * (gSub / allSub) * 100) / 100 : 0,
+          closedAt: transactionData.closedAt,
+        })
+        const warnings = consumeIngredients(info.group.items ?? [])
+        if (warnings?.length) lowStock.push(...warnings)
+      }
+
+      // 4. Update runtime state: mark paid items, drop closed groups
+      setRuntimeStates(prev => {
+        const existing = prev[tableId]
+        if (!existing) return prev
+        const newOrders = (existing.orders ?? [])
+          .map(o => {
+            const info = infos.find(i => i.group.localId === o.localId)
+            if (!info) return o
+            if (info.close) return null
+            const covered = coveredByGroup.get(o.localId) ?? new Set()
+            // info.group carries the split-adjusted items — a partially paid
+            // line is now two lines, so use it instead of the stale o.items
+            return {
+              ...o,
+              persistedOrderId: info.orderId,
+              supabaseOrderId: o.supabaseOrderId ?? (info.remoteId ? Number(info.remoteId) : null),
+              paidAmount: info.paidNow,
+              items: info.group.items.map(i => covered.has(String(i.id)) ? { ...i, paid: true } : i),
+            }
+          })
+          .filter(Boolean)
+        if (newOrders.length === 0) {
+          const next = { ...prev }
+          delete next[tableId]
+          return next
+        }
+        return { ...prev, [tableId]: { ...existing, orders: newOrders } }
+      })
+      if (transactionData.isFullPayment && !scopeGroupLocalId) setSelectedTableId(null)
+
+      if (anyClosed) refreshRevenue()
+      if (lowStock.length) setLowStockAlerts(lowStock)
+      console.log(`[Tables] ✓ ${transactionData.isFullPayment ? 'Order closed' : 'Partial payment'} — Masa ${tableId} | ₺${transactionData.paymentRows?.reduce((s, r) => s + Number(r.amount), 0).toFixed(2)}`)
       if (isOnline) triggerSync()
     } catch (e) {
-      console.error('[Tables] Failed to save order to DB', e)
+      console.error('[Tables] Failed to record payment', e)
     }
   }
 
-  const handlePartialPaymentComplete = async (transactionData) => {
-    setRuntimeStates(prev => {
-      const existing = prev[transactionData.tableId]
-      if (!existing) return prev
-      const newOrders = (existing.orders ?? []).filter(o => o.localId !== transactionData.subOrderLocalId)
-      if (newOrders.length === 0) {
-        const next = { ...prev }
-        delete next[transactionData.tableId]
-        return next
-      }
-      return { ...prev, [transactionData.tableId]: { ...existing, orders: newOrders } }
-    })
-    setPaymentOrder(null)
-    try {
-      const { lowStockWarnings } = await saveCompletedOrder(transactionData)
-      refreshRevenue()
-      if (lowStockWarnings?.length) setLowStockAlerts(lowStockWarnings)
-      console.log(`[Tables] ✓ Partial order paid — Masa ${transactionData.tableId} | ₺${transactionData.total?.toFixed(2)} | ${transactionData.paymentMethod}`)
-      if (transactionData.supabaseOrderId && isSupabaseReady) {
-        await supabase
-          .from('orders')
-          .update({ status: 'completed', payment_method: transactionData.paymentMethod, total: transactionData.total, closed_at: transactionData.closedAt })
-          .eq('id', transactionData.supabaseOrderId)
-      }
-      if (isOnline) triggerSync()
-    } catch (e) {
-      console.error('[Tables] Failed to save partial order to DB', e)
-    }
-  }
+  const handlePaymentComplete = (transactionData) => applyPaymentTx(transactionData, null)
+  const handlePartialPaymentComplete = (transactionData) =>
+    applyPaymentTx(transactionData, transactionData.subOrderLocalId)
+
+  // Guards a double-click on Onayla/Reddet: both clicks see the same
+  // qrQueue[0], so without this the queue gets sliced twice and the NEXT
+  // order silently disappears.
+  const qrActionRef = useRef(null)
 
   const handleQRApprove = async () => {
     const current = qrQueue[0]
     if (!current) return
+    if (qrActionRef.current === current.orderId) return
+    qrActionRef.current = current.orderId
     const moreForSameTable = qrQueue.slice(1).some(o => o.tableId === current.tableId)
     setQrQueue(prev => prev.slice(1))
     setRuntimeStates(prev => {
       const existing = prev[current.tableId] ?? {}
       const prevOrders = existing.orders ?? []
+      // Same Supabase order already approved as a group → don't duplicate it
+      if (prevOrders.some(o => o.supabaseOrderId === current.orderId)) {
+        return { ...prev, [current.tableId]: { ...existing, status: 'occupied', type: moreForSameTable ? 'qr' : 'normal' } }
+      }
       const qrCount = prevOrders.filter(o => o.supabaseOrderId !== null).length
       const label = qrCount === 0 ? 'QR Sipariş' : `QR Sipariş ${qrCount + 1}`
       const newGroup = { localId: crypto.randomUUID(), label, supabaseOrderId: current.orderId, items: current.orderItems }
@@ -472,6 +749,8 @@ function Tables() {
   const handleQRReject = async () => {
     const current = qrQueue[0]
     if (!current) return
+    if (qrActionRef.current === current.orderId) return
+    qrActionRef.current = current.orderId
     const moreForSameTable = qrQueue.slice(1).some(o => o.tableId === current.tableId)
     setQrQueue(prev => prev.slice(1))
     if (!moreForSameTable) {
@@ -607,6 +886,7 @@ function Tables() {
         <PaymentModal
           table={displayTables.find(t => t.id === paymentOrder.tableId) ?? {}}
           partialOrder={paymentOrder}
+          alreadyPaid={paymentOrder.paidAmount ?? 0}
           onClose={() => setPaymentOrder(null)}
           onComplete={handlePartialPaymentComplete}
         />
@@ -615,6 +895,7 @@ function Tables() {
       {paymentTable && (
         <PaymentModal
           table={paymentTable}
+          alreadyPaid={(paymentTable.orders ?? []).reduce((s, o) => s + (o.paidAmount || 0), 0)}
           onClose={() => setPaymentTable(null)}
           onComplete={handlePaymentComplete}
         />

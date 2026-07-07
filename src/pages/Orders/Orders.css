@@ -311,12 +311,13 @@
 /* ── Cards list (single column, full width) ──────────────────── */
 
 .orders-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
   overflow-y: auto;
   flex: 1;
   padding-right: 4px;
+  align-content: start;
 }
 
 .orders-grid::-webkit-scrollbar {
@@ -335,6 +336,7 @@
 /* ── Empty / loading state ───────────────────────────────────── */
 
 .orders-empty {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -375,6 +377,7 @@
   cursor: pointer;
   display: flex;
   flex-direction: row;
+  min-height: 320px;
   transition: box-shadow 0.15s, border-color 0.15s;
   box-shadow: var(--color-shadow);
 }
@@ -548,12 +551,13 @@
   margin: 0 16px;
 }
 
-/* Items list */
+/* Items list — flex:1 pins the footer to the bottom of tall cards */
 .order-card__items-list {
   padding: 10px 16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
 }
 
 .order-card__item-empty {

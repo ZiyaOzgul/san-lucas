@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useApp } from "../../context/AppContext.jsx";
 import useOnlineStatus from "../../hooks/useOnlineStatus.js";
 import ConfirmModal from "../../components/ConfirmModal/ConfirmModal.jsx";
+import { imageSrc } from "../../lib/imageSrc.js";
 import "./Settings.css";
 
 // ── Icons ────────────────────────────────────────────────────────
@@ -86,10 +87,10 @@ const IconTrash = () => (
     <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
   </svg>
 );
-const IconDragHandle = () => (
+const IconAlertTriangle = () => (
   <svg
-    width="16"
-    height="16"
+    width="18"
+    height="18"
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
@@ -97,12 +98,9 @@ const IconDragHandle = () => (
     strokeLinecap="round"
     strokeLinejoin="round"
   >
-    <line x1="8" y1="6" x2="8" y2="6" />
-    <line x1="16" y1="6" x2="16" y2="6" />
-    <line x1="8" y1="12" x2="8" y2="12" />
-    <line x1="16" y1="12" x2="16" y2="12" />
-    <line x1="8" y1="18" x2="8" y2="18" />
-    <line x1="16" y1="18" x2="16" y2="18" />
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
   </svg>
 );
 const IconCoffee = () => (
@@ -334,17 +332,34 @@ const SUB_NAV = [
   { id: "system", label: "Sistem", Icon: IconGear },
 ];
 
-// ── Inline editable table row ─────────────────────────────────────
+// ── Cafe info (device-level, persisted in localStorage) ──────────
+const CAFE_INFO_KEY = "san-lucas-cafe-info";
+const DEFAULT_CAFE_INFO = {
+  name: "San Lucas Cafe",
+  phone: "0546 933 29 50",
+  address:
+    "Belkent caddesi üniversite karşısı fonten binaları, a blok altı, 58400 Şarkışla/Sivas",
+};
+function loadCafeInfo() {
+  try {
+    return { ...DEFAULT_CAFE_INFO, ...JSON.parse(localStorage.getItem(CAFE_INFO_KEY) ?? "{}") };
+  } catch {
+    return { ...DEFAULT_CAFE_INFO };
+  }
+}
+
+// ── Table mini card (inline editable) ─────────────────────────────
 function TableRow({ table, index, onRename, onDelete, autoEdit }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(!!autoEdit);
   const [draft, setDraft] = useState(table.name);
   const inputRef = useRef(null);
 
-  useEffect(() => {
-    if (autoEdit) {
-      setEditing(true);
-    }
-  }, [autoEdit]);
+  // Adjust-during-render (React docs pattern) instead of a setState effect
+  const [prevAutoEdit, setPrevAutoEdit] = useState(autoEdit);
+  if (autoEdit !== prevAutoEdit) {
+    setPrevAutoEdit(autoEdit);
+    if (autoEdit) setEditing(true);
+  }
   useEffect(() => {
     if (editing) inputRef.current?.focus();
   }, [editing]);
@@ -360,15 +375,16 @@ function TableRow({ table, index, onRename, onDelete, autoEdit }) {
   };
 
   return (
-    <div className="st-table-row">
-      <span className="st-drag-handle" title="Sırala">
-        <IconDragHandle />
-      </span>
-      <span className="st-table-num">{index + 1}</span>
+    <div
+      className="st-table-card"
+      onDoubleClick={() => !editing && setEditing(true)}
+      title="Yeniden adlandırmak için çift tıklayın"
+    >
+      <span className="st-table-card__num">{index + 1}</span>
       {editing ? (
         <input
           ref={inputRef}
-          className="st-inline-input"
+          className="st-inline-input st-inline-input--center"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -378,9 +394,9 @@ function TableRow({ table, index, onRename, onDelete, autoEdit }) {
           }}
         />
       ) : (
-        <span className="st-table-name">{table.name}</span>
+        <span className="st-table-card__name">{table.name}</span>
       )}
-      <div className="st-row-actions">
+      <div className="st-table-card__actions">
         <button
           className="st-icon-btn"
           onClick={() => setEditing(true)}
@@ -410,16 +426,18 @@ function CategoryCard({
   onImageChange,
   onDelete,
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(!!autoEdit);
   const [draft, setDraft] = useState(cat.name);
   const [showPicker, setShowPicker] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
   const inputRef = useRef(null);
   const CatIcon = CATEGORY_ICONS[cat.icon] || IconCoffee;
 
-  useEffect(() => {
+  const [prevAutoEdit, setPrevAutoEdit] = useState(autoEdit);
+  if (autoEdit !== prevAutoEdit) {
+    setPrevAutoEdit(autoEdit);
     if (autoEdit) setEditing(true);
-  }, [autoEdit]);
+  }
   useEffect(() => {
     if (editing) inputRef.current?.focus();
   }, [editing]);
@@ -455,7 +473,7 @@ function CategoryCard({
         style={
           cat.imageUrl
             ? {
-                backgroundImage: `url(${cat.imageUrl})`,
+                backgroundImage: `url(${imageSrc(cat.imageUrl)})`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }
@@ -520,6 +538,7 @@ function CategoryCard({
         </button>
         {showIconPicker && (
           <div className="st-icon-picker">
+            {/* eslint-disable-next-line no-unused-vars -- Icon IS used in the JSX below */}
             {Object.entries(CATEGORY_ICONS).map(([key, Icon]) => (
               <button
                 key={key}
@@ -585,9 +604,8 @@ function CategoryCard({
 // Free options like "Soğansız" use price_delta = 0.
 function CategoryModifiersEditor({ categories, modifiers, onSave, onDelete }) {
   const [activeCatId, setActiveCatId] = useState(categories[0]?.id ?? null);
-  useEffect(() => {
-    if (activeCatId == null && categories[0]) setActiveCatId(categories[0].id);
-  }, [categories, activeCatId]);
+  // Adjust-during-render: pick the first category once one exists
+  if (activeCatId == null && categories[0]) setActiveCatId(categories[0].id);
 
   const list = modifiers
     .filter((m) => m.categoryId === activeCatId && m.isActive)
@@ -609,7 +627,12 @@ function CategoryModifiersEditor({ categories, modifiers, onSave, onDelete }) {
   return (
     <div className="settings-card">
       <div className="settings-card__header">
-        <h2 className="settings-card__title">Kategori Ekstraları</h2>
+        <h2 className="settings-card__title">
+          <span className="settings-card__title-icon">
+            <IconTag />
+          </span>
+          Kategori Ekstraları
+        </h2>
         <button
           className="st-add-link"
           onClick={handleAdd}
@@ -666,10 +689,13 @@ function ModifierRow({ modifier, onSave, onDelete }) {
   const [name, setName] = useState(modifier.name);
   const [price, setPrice] = useState(String(modifier.priceDelta ?? 0));
 
-  useEffect(() => {
+  // Adjust-during-render: re-seed drafts when the modifier itself changes
+  const [prevMod, setPrevMod] = useState(modifier);
+  if (prevMod.id !== modifier.id || prevMod.name !== modifier.name || prevMod.priceDelta !== modifier.priceDelta) {
+    setPrevMod(modifier);
     setName(modifier.name);
     setPrice(String(modifier.priceDelta ?? 0));
-  }, [modifier.id, modifier.name, modifier.priceDelta]);
+  }
 
   const commit = () => {
     const trimmed = name.trim();
@@ -752,10 +778,8 @@ function Settings() {
     resetAllData,
     resetOnlineData,
     syncLogs,
-    kdvRate,
-    setKdvRatePersist,
-    kdvEnabled,
-    setKdvEnabledPersist,
+    pointRate,
+    setPointRatePersist,
   } = useApp();
   const { isOnline } = useOnlineStatus();
 
@@ -775,14 +799,65 @@ function Settings() {
     connection: useRef(null),
     system: useRef(null),
   };
+  const contentRef = useRef(null);
+  // While a click-triggered smooth scroll is animating, the scroll-spy would
+  // briefly highlight every section it passes — suppress it until settled.
+  const spyLockRef = useRef(null);
 
   const scrollTo = (id) => {
     setActiveSection(id);
+    clearTimeout(spyLockRef.current);
+    spyLockRef.current = setTimeout(() => (spyLockRef.current = null), 800);
     sectionRefs[id]?.current?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
   };
+
+  // ── Scroll-spy: highlight the section currently in view ────────
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (spyLockRef.current) return;
+      const top = el.getBoundingClientRect().top;
+      let current = "cafe";
+      for (const [id, ref] of Object.entries(sectionRefs)) {
+        const node = ref.current;
+        if (!node) continue;
+        if (node.getBoundingClientRect().top - top <= 130) current = id;
+      }
+      setActiveSection((prev) => (prev === current ? prev : current));
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are stable
+  }, []);
+
+  // ── Cafe info: auto-save (debounced) + "Kaydedildi" toast ──────
+  const [cafeInfo, setCafeInfo] = useState(loadCafeInfo);
+  const [savedToast, setSavedToast] = useState(false);
+  const saveTimerRef = useRef(null);
+  const toastTimerRef = useRef(null);
+  const handleCafeChange = (field, value) => {
+    const next = { ...cafeInfo, [field]: value };
+    setCafeInfo(next);
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      localStorage.setItem(CAFE_INFO_KEY, JSON.stringify(next));
+      setSavedToast(true);
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setSavedToast(false), 1800);
+    }, 600);
+  };
+  useEffect(
+    () => () => {
+      clearTimeout(saveTimerRef.current);
+      clearTimeout(toastTimerRef.current);
+      clearTimeout(spyLockRef.current);
+    },
+    []
+  );
 
   // ── Table handlers ─────────────────────────────────────────────
   const handleAddTable = async () => {
@@ -808,7 +883,10 @@ function Settings() {
   };
 
   // ── Category handlers ──────────────────────────────────────────
+  const addCatBusyRef = useRef(false); // double-click creates duplicate categories
   const handleAddCategory = async () => {
+    if (addCatBusyRef.current) return;
+    addCatBusyRef.current = true;
     try {
       setCatError(null);
       const row = await addCategory({
@@ -819,6 +897,8 @@ function Settings() {
       setAutoEditCatId(row?.id ?? null);
     } catch (err) {
       setCatError(`Kategori eklenemedi: ${err.message}`);
+    } finally {
+      addCatBusyRef.current = false;
     }
   };
   const handleRenameCategory = async (id, name) => {
@@ -946,6 +1026,7 @@ function Settings() {
         <div className="settings-body">
           {/* Sub-nav */}
           <nav className="settings-subnav">
+            {/* eslint-disable-next-line no-unused-vars -- Icon IS used in the JSX below */}
             {SUB_NAV.map(({ id, label, Icon }) => (
               <button
                 key={id}
@@ -959,34 +1040,79 @@ function Settings() {
           </nav>
 
           {/* Content */}
-          <div className="settings-content">
+          <div className="settings-content" ref={contentRef}>
             {/* ── 1. Cafe Bilgileri ── */}
             <div ref={sectionRefs.cafe} className="settings-card">
-              <h2 className="settings-card__title">Cafe Bilgileri</h2>
+              <h2 className="settings-card__title">
+                <span className="settings-card__title-icon">
+                  <IconBriefcase />
+                </span>
+                Cafe Bilgileri
+              </h2>
               <div className="settings-cafe-grid">
-                <div className="settings-cafe-info">
-                  <div className="settings-info-row">
-                    <span className="settings-info-label">Cafe Adı</span>
-                    <span className="settings-info-value">San Lucas Cafe</span>
+                <div className="settings-cafe-fields">
+                  <div className="settings-field">
+                    <label className="settings-label">Cafe Adı</label>
+                    <input
+                      className="settings-input"
+                      value={cafeInfo.name}
+                      onChange={(e) => handleCafeChange("name", e.target.value)}
+                      placeholder="Cafe adı"
+                    />
                   </div>
-                  <div className="settings-info-row">
-                    <span className="settings-info-label">Telefon</span>
-                    <span className="settings-info-value">0546 933 29 50</span>
+                  <div className="settings-field">
+                    <label className="settings-label">Telefon</label>
+                    <input
+                      className="settings-input"
+                      value={cafeInfo.phone}
+                      onChange={(e) => handleCafeChange("phone", e.target.value)}
+                      placeholder="Telefon"
+                    />
                   </div>
-                  <div className="settings-info-row">
-                    <span className="settings-info-label">Adres</span>
-                    <span className="settings-info-value">
-                      Belkent caddesi üniversite karşısı fonten binaları, a blok
-                      altı, 58400 Şarkışla/Sivas
+                  <div className="settings-field">
+                    <label className="settings-label">Adres</label>
+                    <textarea
+                      className="settings-input settings-textarea"
+                      value={cafeInfo.address}
+                      onChange={(e) => handleCafeChange("address", e.target.value)}
+                      placeholder="Adres"
+                    />
+                  </div>
+                  <p className="settings-autosave-hint">
+                    Değişiklikler otomatik kaydedilir ve fiş önizlemesine anında
+                    yansır.
+                  </p>
+                </div>
+                <div className="st-receipt-zone">
+                  <div className="st-receipt">
+                    <img
+                      src="./san-lucas-logo.png"
+                      alt=""
+                      className="st-receipt__logo"
+                    />
+                    <span className="st-receipt__name">{cafeInfo.name}</span>
+                    <span className="st-receipt__meta">{cafeInfo.address}</span>
+                    <span className="st-receipt__meta">Tel: {cafeInfo.phone}</span>
+                    <div className="st-receipt__divider" />
+                    <div className="st-receipt__line">
+                      <span>2× Americano</span>
+                      <span>₺170,00</span>
+                    </div>
+                    <div className="st-receipt__line">
+                      <span>1× Cheesecake</span>
+                      <span>₺145,00</span>
+                    </div>
+                    <div className="st-receipt__divider" />
+                    <div className="st-receipt__line st-receipt__line--total">
+                      <span>TOPLAM</span>
+                      <span>₺315,00</span>
+                    </div>
+                    <div className="st-receipt__divider" />
+                    <span className="st-receipt__thanks">
+                      Teşekkür ederiz, yine bekleriz ☕
                     </span>
                   </div>
-                </div>
-                <div className="settings-logo-zone">
-                  <img
-                    src="./san-lucas-logo.png"
-                    alt="San Lucas Cafe Logo"
-                    className="settings-logo-img"
-                  />
+                  <span className="st-receipt-caption">Fiş önizlemesi</span>
                 </div>
               </div>
             </div>
@@ -994,7 +1120,15 @@ function Settings() {
             {/* ── 2. Masa Yönetimi ── */}
             <div ref={sectionRefs.tables} className="settings-card">
               <div className="settings-card__header">
-                <h2 className="settings-card__title">Masa Yönetimi</h2>
+                <h2 className="settings-card__title">
+                  <span className="settings-card__title-icon">
+                    <IconGrid />
+                  </span>
+                  Masa Yönetimi
+                  <span className="settings-card__count">
+                    {tableDefs.length} masa
+                  </span>
+                </h2>
                 <button className="st-add-btn" onClick={handleAddTable}>
                   + Yeni Masa Ekle
                 </button>
@@ -1022,7 +1156,12 @@ function Settings() {
             {/* ── 3. Menü Kategorileri ── */}
             <div ref={sectionRefs.categories} className="settings-card">
               <div className="settings-card__header">
-                <h2 className="settings-card__title">Menü Kategorileri</h2>
+                <h2 className="settings-card__title">
+                  <span className="settings-card__title-icon">
+                    <IconTag />
+                  </span>
+                  Menü Kategorileri
+                </h2>
                 <button className="st-add-link" onClick={handleAddCategory}>
                   + Kategori Ekle
                 </button>
@@ -1054,13 +1193,19 @@ function Settings() {
 
             {/* ── 4. Bağlantı Durumu ── */}
             <div ref={sectionRefs.connection} className="settings-card">
-              <h2 className="settings-card__title">Bağlantı Durumu</h2>
+              <h2 className="settings-card__title">
+                <span className="settings-card__title-icon">
+                  <IconWifi />
+                </span>
+                Bağlantı Durumu
+              </h2>
               <div className="st-connection-grid">
                 <div className="st-conn-row">
                   <span className="st-conn-label">İnternet Bağlantısı</span>
                   <span
                     className={`st-conn-badge ${isOnline ? "st-conn-badge--online" : "st-conn-badge--offline"}`}
                   >
+                    <span className="st-conn-dot" />
                     {isOnline ? "Çevrimiçi" : "Çevrimdışı"}
                   </span>
                 </div>
@@ -1069,6 +1214,7 @@ function Settings() {
                   <span
                     className={`st-conn-badge ${isOnline ? "st-conn-badge--online" : "st-conn-badge--offline"}`}
                   >
+                    <span className="st-conn-dot" />
                     {isOnline ? "Bağlı" : "Bağlantı Kesildi"}
                   </span>
                 </div>
@@ -1088,55 +1234,54 @@ function Settings() {
                       : "Şimdi Senkronize Et"}
                 </button>
                 {syncLogs.length > 0 && (
-                  <div className="st-sync-log">
-                    {syncLogs.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className={`st-sync-log-entry st-sync-log-entry--${entry.type}`}
-                      >
-                        <span className="st-sync-log-time">
-                          {entry.time.toLocaleTimeString("tr-TR")}
-                        </span>
-                        <span className="st-sync-log-text">{entry.text}</span>
-                      </div>
-                    ))}
-                  </div>
+                  <>
+                    <span className="st-sync-log-title">Senkron Geçmişi</span>
+                    <div className="st-sync-log">
+                      {syncLogs.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className={`st-sync-log-entry st-sync-log-entry--${entry.type}`}
+                        >
+                          <span className="st-sync-log-time">
+                            {entry.time.toLocaleTimeString("tr-TR")}
+                          </span>
+                          <span className="st-sync-log-text">{entry.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
 
             {/* ── 5. Sistem ── */}
             <div ref={sectionRefs.system} className="settings-card">
-              <h2 className="settings-card__title">Sistem</h2>
+              <h2 className="settings-card__title">
+                <span className="settings-card__title-icon">
+                  <IconGear />
+                </span>
+                Sistem
+              </h2>
               <div className="st-sistem-grid">
                 <div>
-                  <label className="settings-label">KDV</label>
-                  <div className="st-kdv-toggle-row">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={kdvEnabled}
-                      className={`st-switch ${kdvEnabled ? "st-switch--on" : ""}`}
-                      onClick={() => setKdvEnabledPersist(!kdvEnabled)}
-                    >
-                      <span className="st-switch__thumb" />
-                    </button>
-                    <span className="st-switch-label">
-                      {kdvEnabled ? "Aktif" : "Pasif"}
-                    </span>
-                  </div>
-                  <div className="st-kdv-row">
+                  <label className="settings-label">Sadakat Puanı</label>
+                  <p className="st-point-desc">
+                    QR menüden sipariş veren üyeler, siparişleri ödendiğinde
+                    ürünlerin puan değeri kadar puan kazanır. Kazanılan puanlar
+                    ödeme ekranında indirim olarak kullanılabilir. 1 puanın TL
+                    karşılığını buradan belirleyin.
+                  </p>
+                  <div className="st-point-row">
+                    <span className="st-point-label">1 Puan =</span>
                     <input
                       type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      className="settings-input st-kdv-input"
-                      value={kdvRate}
-                      onChange={(e) => setKdvRatePersist(e.target.value)}
-                      disabled={!kdvEnabled}
+                      min="0.01"
+                      step="0.5"
+                      className="settings-input st-point-input"
+                      value={pointRate}
+                      onChange={(e) => setPointRatePersist(e.target.value)}
                     />
-                    <span className="st-kdv-suffix">%</span>
+                    <span className="st-point-suffix">₺</span>
                   </div>
                 </div>
                 <div>
@@ -1190,35 +1335,60 @@ function Settings() {
                       <span>Güncelleme Kontrol Et</span>
                       <span className="st-version-badge">v1.0.0</span>
                     </button>
-                    <button
-                      className="st-quick-row st-quick-row--danger"
-                      onClick={() => setResetModal("choose")}
-                    >
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                        <path d="M10 11v6" />
-                        <path d="M14 11v6" />
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                      </svg>
-                      <span>Tüm Verileri Sıfırla</span>
-                    </button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* ── 6. Tehlikeli Bölge ── */}
+            <div className="settings-card settings-card--danger">
+              <h2 className="settings-card__title">
+                <span className="settings-card__title-icon settings-card__title-icon--danger">
+                  <IconAlertTriangle />
+                </span>
+                Tehlikeli Bölge
+              </h2>
+              <div className="st-danger-row">
+                <div className="st-danger-row__text">
+                  <span className="st-danger-row__title">
+                    Tüm Verileri Sıfırla
+                  </span>
+                  <span className="st-danger-row__desc">
+                    Ürünler, kategoriler ve sipariş geçmişi kalıcı olarak
+                    silinir. Bu işlem geri alınamaz.
+                  </span>
+                </div>
+                <button
+                  className="st-danger-btn"
+                  onClick={() => setResetModal("choose")}
+                >
+                  <IconTrash />
+                  Verileri Sıfırla
+                </button>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* ── Auto-save toast ── */}
+      {savedToast && (
+        <div className="st-saved-toast">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          Kaydedildi
+        </div>
+      )}
 
       {/* ── Reset Data Modal ─────────────────────────────────── */}
       {resetModal && (

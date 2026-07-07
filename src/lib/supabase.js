@@ -110,9 +110,16 @@ export async function uploadCategoryImage(bytes, filename) {
 
 export async function resetSupabaseData() {
   if (!supabase) throw new Error('Supabase not configured')
-  // Delete in FK-safe order (children before parents)
+  // Delete in FK-safe order (children before parents). payment_items and
+  // order_item_modifiers reference order_items — skipping them makes every
+  // parent delete fail on FK and the reset silently half-completes.
+  await supabase.from('payment_items').delete().gte('id', 0)
+  await supabase.from('payments').delete().gte('id', 0)
+  await supabase.from('order_item_modifiers').delete().gte('id', 0)
   await supabase.from('order_items').delete().gte('id', 0)
   await supabase.from('orders').delete().gte('id', 0)
+  await supabase.from('product_modifier_excludes').delete().gte('product_id', 0)
+  await supabase.from('modifiers').delete().gte('id', 0)
   await supabase.from('product_variants').delete().gte('id', 0)
   await supabase.from('product_ingredients').delete().gte('id', 0)
   await supabase.from('products').delete().gte('id', 0)
