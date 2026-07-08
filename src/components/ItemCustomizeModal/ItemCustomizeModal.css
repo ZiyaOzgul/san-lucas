@@ -78,6 +78,118 @@
   color: var(--color-text-muted, #9ca3af);
 }
 
+/* ── Variant picker (merged into the customize modal) ── */
+.icm-section-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--color-text-secondary, #6b7280);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.icm-variants {
+  display: flex;
+  flex-direction: column;
+}
+
+.icm-variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.icm-variant-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-bg-page, #f5f5f0);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  text-align: left;
+}
+
+.icm-variant-item:hover {
+  border-color: var(--color-accent, #e8975a);
+}
+
+.icm-variant-item--active {
+  background: var(--color-accent-light, #fdf0e8);
+  border-color: var(--color-accent, #e8975a);
+}
+
+.icm-variant-item__name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary, #1a1a2e);
+}
+
+.icm-variant-item__price {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-accent, #e8975a);
+}
+
+/* ── Quantity stepper ── */
+.icm-qty-section {
+  padding-top: 2px;
+}
+
+.icm-qty-stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.icm-qty-stepper__btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-bg-card, #fff);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary, #1a1a2e);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.icm-qty-stepper__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.icm-qty-stepper__btn--plus {
+  background: var(--color-accent, #e8975a);
+  border-color: var(--color-accent, #e8975a);
+  color: #fff;
+}
+
+.icm-qty-stepper__input {
+  width: 56px;
+  height: 40px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--color-text-primary, #1a1a2e);
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--color-bg-page, #f5f5f0);
+  -moz-appearance: textfield;
+}
+
+.icm-qty-stepper__input::-webkit-outer-spin-button,
+.icm-qty-stepper__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .icm-list {
   display: flex;
   flex-direction: column;

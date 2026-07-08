@@ -2613,3 +2613,184 @@ export async function markOrderItemSyncedById(localItemId) {
   db.run('UPDATE order_items SET is_synced = 1 WHERE id = ?', [localItemId])
   await persistDb()
 }
+
+// ── Reopen closed order (correction / new order) ──────────────────
+// A completed order can be reopened from the "Kapananlar" page — either to
+// correct a mistake (cancel the original + restore stock + delete its
+// payments) or to add a follow-up order for a subset of the same items.
+
+// Exact inverse of consumeIngredients. No low-stock warnings — restoring
+// stock never needs the low-stock alert path.
+export function restoreIngredients(items) {
+  requireDb()
+  for (const item of items) {
+    if (!item.variantId) continue
+    const rRes = db.exec(
+      'SELECT ingredient_id, amount_used FROM product_variant_ingredients WHERE variant_id = ?',
+      [item.variantId]
+    )
+    if (!rRes.length) continue
+    for (const [ingredient_id, amount_used] of rRes[0].values) {
+      db.run(
+        'UPDATE ingredients SET stock_amount = stock_amount + ?, is_synced = 0 WHERE id = ?',
+        [amount_used * (item.qty ?? 1), ingredient_id]
+      )
+    }
+  }
+
+  // Direct product→ingredient recipe (no variant)
+  for (const item of items) {
+    if (item.variantId) continue
+    if (!item.productId) continue
+    const rRes = db.exec(
+      'SELECT ingredient_id, amount_used FROM product_ingredients WHERE product_id = ?',
+      [item.productId]
+    )
+    if (!rRes.length) continue
+    for (const [ingredient_id, amount_used] of rRes[0].values) {
+      db.run(
+        'UPDATE ingredients SET stock_amount = stock_amount + ?, is_synced = 0 WHERE id = ?',
+        [amount_used * (item.qty ?? 1), ingredient_id]
+      )
+    }
+  }
+}
+
+// Full snapshot of a completed order for the reopen flow: order header +
+// items (with productId/variantId so restoreIngredients / re-adding items
+// to a live table has everything it needs) + their modifiers.
+export function getCompletedOrderDetail(orderId) {
+  requireDb()
+  const oRes = db.exec(
+    `SELECT id, table_id, table_name, total, closed_at, payment_method, remote_id
+     FROM orders WHERE id = ?`,
+    [orderId]
+  )
+  if (!oRes.length || !oRes[0].values.length) return null
+  const [id, tableId, tableName, total, closedAt, paymentMethod, remoteId] = oRes[0].values[0]
+
+  const itemsRes = db.exec(
+    `SELECT id, product_id, variant_id, name, unit_price, quantity, note
+     FROM order_items WHERE order_id = ? ORDER BY id`,
+    [orderId]
+  )
+  const items = itemsRes.length
+    ? itemsRes[0].values.map(([iid, productId, variantId, name, unitPrice, qty, note]) => ({
+        id: iid,
+        productId: productId ?? null,
+        variantId: variantId ?? null,
+        name,
+        unitPrice,
+        qty,
+        note: note || '',
+        modifiers: [],
+      }))
+    : []
+
+  const modsMap = getModifiersForOrderItems(items.map(i => i.id))
+  for (const it of items) {
+    it.modifiers = (modsMap[it.id] || []).map(m => ({
+      modifierId: m.modifierId,
+      name: m.name,
+      priceDelta: m.priceDelta,
+      quantity: m.quantity,
+    }))
+  }
+
+  return {
+    id,
+    tableId,
+    tableName,
+    total,
+    closedAt,
+    paymentMethod,
+    remoteId: remoteId ?? null,
+    items,
+  }
+}
+
+// Reopening for correction cancels the original order and undoes its
+// payments — tombstoning remote payments (if any) and clearing the local
+// payment rows so the order carries no stale collected amount.
+export async function deleteOrderPaymentsCascade(orderId) {
+  requireDb()
+  const res = db.exec('SELECT id, remote_id FROM payments WHERE order_id = ?', [orderId])
+  if (res.length) {
+    for (const [paymentId, remoteId] of res[0].values) {
+      if (remoteId) {
+        db.run("INSERT INTO pending_deletes (entity_type, remote_id) VALUES ('payment', ?)", [remoteId])
+      }
+      db.run('DELETE FROM payment_items WHERE payment_id = ?', [paymentId])
+    }
+  }
+  db.run('DELETE FROM payments WHERE order_id = ?', [orderId])
+  await persistDb()
+}
+
+// Completed orders for the "Kapananlar" page, newest first. Items +
+// modifiers are batch-loaded the same way getOrdersList does.
+export function getClosedOrders({ sinceIso = null, limit = 200 } = {}) {
+  requireDb()
+  const clause = sinceIso ? "AND date(closed_at,'localtime') >= ?" : ''
+  const params = sinceIso ? [sinceIso] : []
+  const res = db.exec(
+    `SELECT id, closed_at, table_id, table_name, total, payment_method, waiter_name, remote_id
+     FROM orders
+     WHERE status = 'completed' ${clause}
+     ORDER BY closed_at DESC
+     LIMIT ${Number(limit) || 200}`,
+    params
+  )
+  if (!res.length || !res[0].values.length) return []
+  const orders = res[0].values.map(([id, closedAt, tableId, tableName, total, paymentMethod, waiterName, remoteId]) => ({
+    id,
+    closedAt,
+    tableId,
+    tableName,
+    total,
+    paymentMethod,
+    waiterName: waiterName || null,
+    remoteId: remoteId ?? null,
+    items: [],
+  }))
+
+  const orderIds = orders.map(o => o.id)
+  const itemsByOrder = {}
+  const allItemIds = []
+  const placeholders = orderIds.map(() => '?').join(',')
+  const itemsRes = db.exec(
+    `SELECT id, order_id, product_id, variant_id, name, quantity, unit_price, note
+     FROM order_items
+     WHERE order_id IN (${placeholders})
+     ORDER BY id`,
+    orderIds
+  )
+  if (itemsRes.length && itemsRes[0].values.length) {
+    for (const [iid, oid, productId, variantId, name, qty, unitPrice, note] of itemsRes[0].values) {
+      if (!itemsByOrder[oid]) itemsByOrder[oid] = []
+      itemsByOrder[oid].push({
+        id: iid,
+        productId: productId ?? null,
+        variantId: variantId ?? null,
+        name,
+        qty,
+        unitPrice,
+        note: note || '',
+        modifiers: [],
+      })
+      allItemIds.push(iid)
+    }
+  }
+
+  const modsMap = getModifiersForOrderItems(allItemIds)
+  for (const items of Object.values(itemsByOrder)) {
+    for (const it of items) {
+      it.modifiers = modsMap[it.id] || []
+    }
+  }
+
+  for (const o of orders) {
+    o.items = itemsByOrder[o.id] || []
+  }
+  return orders
+}

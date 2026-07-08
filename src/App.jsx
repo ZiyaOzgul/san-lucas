@@ -12,6 +12,7 @@ import Reports from './pages/Reports/Reports.jsx'
 import Staff from './pages/Staff/Staff.jsx'
 import Settings from './pages/Settings/Settings.jsx'
 import Login from './pages/Login/Login.jsx'
+import ClosedTables from './pages/ClosedTables/ClosedTables.jsx'
 
 function AppShell() {
   const { dbReady, dbError, triggerSync } = useApp()
@@ -51,6 +52,7 @@ function AppShell() {
         <Routes>
           <Route path="/"         element={<Tables />} />
           <Route path="/orders"   element={<Orders />} />
+          <Route path="/closed-tables" element={<ClosedTables />} />
           <Route path="/products"    element={<Products />} />
           <Route path="/ingredients" element={<Ingredients />} />
           <Route path="/reports"     element={<Reports />} />

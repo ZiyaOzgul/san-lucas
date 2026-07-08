@@ -69,7 +69,7 @@ export async function syncToSupabase(log = null) {
   // ── Pending deletes ────────────────────────────────────────────
   const pendingDeletes = getPendingDeletes()
   for (const pd of pendingDeletes) {
-    const tableMap = { product: 'products', category: 'categories', ingredient: 'ingredients', modifier: 'modifiers', variant: 'product_variants' }
+    const tableMap = { product: 'products', category: 'categories', ingredient: 'ingredients', modifier: 'modifiers', variant: 'product_variants', payment: 'payments' }
     const table = tableMap[pd.entity_type]
     if (!table) { await clearPendingDelete(pd.id); continue }
     const { error } = await supabase.from(table).delete().eq('id', pd.remote_id)

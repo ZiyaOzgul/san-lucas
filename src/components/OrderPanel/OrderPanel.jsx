@@ -71,34 +71,43 @@ const CATEGORY_ICONS = {
   dessert: IconDessert, breakfast: IconBreakfast, pizza: IconPizza,
 }
 
-// ── Variant picker ────────────────────────────────────────────────
-function VariantPicker({ product, variants, onSelect, onClose }) {
-  return (
-    <div className="variant-picker-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="variant-picker">
-        <div className="variant-picker__header">
-          <span className="variant-picker__title">{product.name}</span>
-          <button className="om-close-btn" onClick={onClose}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-        <div className="variant-picker__list">
-          {variants.map(v => (
-            <button
-              key={v.id}
-              className="variant-picker__item"
-              onClick={() => onSelect(v)}
-            >
-              <span className="variant-picker__item-name">{v.name}</span>
-              <span className="variant-picker__item-price">₺{v.price.toLocaleString('tr-TR')}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
+// ── Grouping (display-only) ─────────────────────────────────────────
+// Unpaid items sharing productId + variantId + sorted modifiers + note are
+// visually combined into one row. Paid items are never regrouped — they
+// keep rendering individually, exactly as before.
+function modifierSigPart(modifiers) {
+  return (modifiers || [])
+    .map(m => `${m.modifierId ?? m.id}:${m.quantity || 1}`)
+    .sort()
+    .join(',')
+}
+
+function itemSignature(item) {
+  return [
+    item.productId,
+    item.variantId ?? '',
+    modifierSigPart(item.modifiers),
+    (item.note || '').trim(),
+  ].join('|')
+}
+
+function buildDisplayRows(items) {
+  const rows = []
+  const indexBySig = new Map()
+  for (const item of items) {
+    if (item.paid) {
+      rows.push({ kind: 'single', item })
+      continue
+    }
+    const sig = itemSignature(item)
+    if (indexBySig.has(sig)) {
+      rows[indexBySig.get(sig)].items.push(item)
+    } else {
+      indexBySig.set(sig, rows.length)
+      rows.push({ kind: 'group', sig, items: [item] })
+    }
+  }
+  return rows
 }
 
 // ── Main component ────────────────────────────────────────────────
@@ -111,12 +120,12 @@ function OrderPanel({
   const [search,               setSearch]               = useState('')
   const [activeCatId,          setActiveCatId]          = useState(null)
   const [pickerView,           setPickerView]           = useState('categories')
-  const [variantPickerProduct, setVariantPickerProduct] = useState(null)
   const [discountEditorOpen,   setDiscountEditorOpen]   = useState(false)
+  const [expandedGroups,       setExpandedGroups]       = useState(new Set())
 
-  // Customize modal flow (variant + modifiers)
+  // Customize modal flow (variant + modifiers + qty, single combined modal)
   const [customizeModal, setCustomizeModal] = useState(null)
-  // customizeModal = { mode:'add'|'edit', product, variant?, basePrice, initialModifiers, editTarget?:{orderId,itemId} }
+  // customizeModal = { mode:'add'|'edit', product, variants?, basePrice, initialModifiers, editTarget?:{orderId,itemId} }
 
   // Transfer flow
   const [selectionMode,    setSelectionMode]    = useState(false)
@@ -141,42 +150,33 @@ function OrderPanel({
 
   // ── Product selection ──────────────────────────────────────────
   // Resolves the product object for the customize modal. We pass through
-  // categoryId so the modal can look up the right modifier list.
+  // categoryId so the modal can look up the right modifier list. Variant
+  // choice, extras, and quantity are all handled in one combined modal.
   const handleProductClick = (p) => {
-    const variants = productVariants[p.id]
-    if (variants?.length) {
-      setVariantPickerProduct(p)
-    } else {
-      setCustomizeModal({
-        mode: 'add',
-        product: p,
-        variant: null,
-        basePrice: p.price,
-        initialModifiers: [],
-      })
-    }
-  }
-
-  const handleVariantSelect = (variant) => {
-    const p = variantPickerProduct
-    setVariantPickerProduct(null)
+    const variants = productVariants[p.id] ?? []
     setCustomizeModal({
       mode: 'add',
       product: p,
-      variant,
-      basePrice: variant.price,
+      variants,
+      basePrice: p.price,
       initialModifiers: [],
     })
   }
 
-  const handleCustomizeSubmit = (modifiers) => {
+  const handleCustomizeSubmit = (modifiers, qty = 1, variant = null) => {
     if (!customizeModal) return
     if (customizeModal.mode === 'add') {
-      const { product, variant } = customizeModal
+      const { product } = customizeModal
       const payload = variant
         ? { id: variant.id, productId: product.id, name: `${product.name} (${variant.name})`, price: variant.price, variantId: variant.id }
         : { id: product.id, productId: product.id, name: product.name, price: product.price, variantId: null }
-      onAddItem(table.id, payload, modifiers)
+      const n = Math.min(99, Math.max(1, Number(qty) || 1))
+      // Mobile parity model: every unit is its own row (see Tables.jsx
+      // makeLineItem), so N× add = N calls. These share a signature and
+      // render as one grouped row in the panel.
+      for (let i = 0; i < n; i++) {
+        onAddItem(table.id, payload, modifiers)
+      }
     } else if (customizeModal.editTarget) {
       const { orderId, itemId } = customizeModal.editTarget
       onUpdateNote(table.id, itemId, modifiers, orderId)
@@ -193,10 +193,20 @@ function OrderPanel({
     setCustomizeModal({
       mode: 'edit',
       product,
-      variant: null,
+      variants: [],
       basePrice: item.unitPrice,
       initialModifiers: item.modifiers || [],
       editTarget: { orderId: order.localId, itemId: item.id },
+    })
+  }
+
+  // ── Group expand/collapse (display-only grouping) ───────────────
+  const toggleGroupExpanded = (key) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
     })
   }
 
@@ -267,6 +277,140 @@ function OrderPanel({
     }
   }
 
+  // ── Item row rendering ───────────────────────────────────────────
+  // Single line item — identical markup/behavior as before grouping was
+  // introduced. Used both for standalone rows and for the expanded
+  // children of a multi-item group.
+  const renderItemRow = (order, item) => {
+    const isPaid = !!item.paid
+    const selected = !isPaid && selectedItemIds.has(item.id)
+    const hasNote = !!(item.note && item.note.trim())
+    const itemMods = item.modifiers || []
+    const hasMods = itemMods.length > 0
+    const lineUnit = item.unitPrice + modifiersSum(itemMods)
+    return (
+      <div
+        key={`${order.localId}-${item.id}`}
+        className={`om-item ${selectionMode && !isPaid ? 'om-item--selectable' : ''} ${selected ? 'om-item--selected' : ''} ${isPaid ? 'om-item--paid' : ''}`}
+        onClick={selectionMode && !isPaid ? () => toggleSelectItem(item.id) : undefined}
+      >
+        {selectionMode && (
+          <span className="om-item__checkbox" aria-hidden>
+            {isPaid ? '✓' : (selected ? '☑' : '☐')}
+          </span>
+        )}
+        {!selectionMode && (
+          <span className="om-item__qty-badge">
+            {item.qty > 1 ? `×${item.qty}` : '1'}
+          </span>
+        )}
+        <div className="om-item__main">
+          <div className="om-item__name">{item.name}</div>
+          {hasMods && (
+            <div className="om-item__mods">
+              {itemMods.map((m, idx) => {
+                const q = m.quantity || 1
+                const deltaTotal = (Number(m.priceDelta) || 0) * q
+                return (
+                  <div key={m.modifierId ?? m.id ?? idx} className="om-item__mod">
+                    <span className="om-item__mod-name">
+                      + {m.name}{q > 1 ? ` ×${q}` : ''}
+                    </span>
+                    {deltaTotal !== 0 && (
+                      <span className="om-item__mod-delta">
+                        {deltaTotal > 0 ? '+' : '–'}₺{Math.abs(deltaTotal).toLocaleString('tr-TR')}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {hasNote && (
+            <div className="om-item__note">{item.note}</div>
+          )}
+        </div>
+        <span className="om-item__total">₺{(item.qty * lineUnit).toLocaleString('tr-TR')}</span>
+        {!selectionMode && isPaid && (
+          <span className="om-item__paid-badge">Ödendi</span>
+        )}
+        {!selectionMode && !isPaid && (
+          <>
+            <button
+              className={`om-item__icon-btn ${hasMods ? 'om-item__icon-btn--note-on' : ''}`}
+              title="Ekstraları düzenle"
+              onClick={() => openEditCustomize(order, item)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+            <button
+              className="om-item__icon-btn om-item__icon-btn--danger"
+              title="Kaldır"
+              onClick={() => onRemoveItem(table.id, item.id, order.localId)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  // Group header — combined qty chip + name + modifier summary + combined
+  // total, with an expand/collapse chevron revealing the individual rows.
+  // Only used for unpaid groups with more than one underlying item.
+  const renderGroupHeader = (order, group) => {
+    const first = group.items[0]
+    const totalQty = group.items.reduce((s, i) => s + i.qty, 0)
+    const itemMods = first.modifiers || []
+    const hasMods = itemMods.length > 0
+    const hasNote = !!(first.note && first.note.trim())
+    const combinedTotal = group.items.reduce((s, i) => s + i.qty * (i.unitPrice + modifiersSum(i.modifiers)), 0)
+    const key = `${order.localId}::${group.sig}`
+    const expanded = expandedGroups.has(key)
+    return (
+      <div key={key} className="om-item-group">
+        <div
+          className="om-item om-item-group__header"
+          onClick={() => toggleGroupExpanded(key)}
+        >
+          <button
+            className={`om-item-group__chevron ${expanded ? 'om-item-group__chevron--open' : ''}`}
+            aria-label={expanded ? 'Daralt' : 'Genişlet'}
+            onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(key) }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 6 15 12 9 18"/>
+            </svg>
+          </button>
+          <span className="om-item__qty-badge om-item__qty-badge--group">×{totalQty}</span>
+          <div className="om-item__main">
+            <div className="om-item__name">{first.name}</div>
+            {hasMods && (
+              <div className="om-item__mods-summary">
+                {itemMods.map(m => `+ ${m.name}${(m.quantity || 1) > 1 ? ` ×${m.quantity}` : ''}`).join(', ')}
+              </div>
+            )}
+            {hasNote && (
+              <div className="om-item__note">{first.note}</div>
+            )}
+          </div>
+          <span className="om-item__total">₺{combinedTotal.toLocaleString('tr-TR')}</span>
+        </div>
+        {expanded && (
+          <div className="om-item-group__children">
+            {group.items.map(item => renderItemRow(order, item))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="om-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="om-modal">
@@ -320,85 +464,13 @@ function OrderPanel({
                           >Öde</button>
                         </div>
                       )}
-                      {order.items.map(item => {
-                        const isPaid = !!item.paid
-                        const selected = !isPaid && selectedItemIds.has(item.id)
-                        const hasNote = !!(item.note && item.note.trim())
-                        const itemMods = item.modifiers || []
-                        const hasMods = itemMods.length > 0
-                        const lineUnit = item.unitPrice + modifiersSum(itemMods)
-                        return (
-                          <div
-                            key={`${order.localId}-${item.id}`}
-                            className={`om-item ${selectionMode && !isPaid ? 'om-item--selectable' : ''} ${selected ? 'om-item--selected' : ''} ${isPaid ? 'om-item--paid' : ''}`}
-                            onClick={selectionMode && !isPaid ? () => toggleSelectItem(item.id) : undefined}
-                          >
-                            {selectionMode && (
-                              <span className="om-item__checkbox" aria-hidden>
-                                {isPaid ? '✓' : (selected ? '☑' : '☐')}
-                              </span>
-                            )}
-                            {!selectionMode && (
-                              <span className="om-item__qty-badge">
-                                {item.qty > 1 ? `×${item.qty}` : '1'}
-                              </span>
-                            )}
-                            <div className="om-item__main">
-                              <div className="om-item__name">{item.name}</div>
-                              {hasMods && (
-                                <div className="om-item__mods">
-                                  {itemMods.map((m, idx) => {
-                                    const q = m.quantity || 1
-                                    const deltaTotal = (Number(m.priceDelta) || 0) * q
-                                    return (
-                                      <div key={m.modifierId ?? m.id ?? idx} className="om-item__mod">
-                                        <span className="om-item__mod-name">
-                                          + {m.name}{q > 1 ? ` ×${q}` : ''}
-                                        </span>
-                                        {deltaTotal !== 0 && (
-                                          <span className="om-item__mod-delta">
-                                            {deltaTotal > 0 ? '+' : '–'}₺{Math.abs(deltaTotal).toLocaleString('tr-TR')}
-                                          </span>
-                                        )}
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )}
-                              {hasNote && (
-                                <div className="om-item__note">{item.note}</div>
-                              )}
-                            </div>
-                            <span className="om-item__total">₺{(item.qty * lineUnit).toLocaleString('tr-TR')}</span>
-                            {!selectionMode && isPaid && (
-                              <span className="om-item__paid-badge">Ödendi</span>
-                            )}
-                            {!selectionMode && !isPaid && (
-                              <>
-                                <button
-                                  className={`om-item__icon-btn ${hasMods ? 'om-item__icon-btn--note-on' : ''}`}
-                                  title="Ekstraları düzenle"
-                                  onClick={() => openEditCustomize(order, item)}
-                                >
-                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                    <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                                  </svg>
-                                </button>
-                                <button
-                                  className="om-item__icon-btn om-item__icon-btn--danger"
-                                  title="Kaldır"
-                                  onClick={() => onRemoveItem(table.id, item.id, order.localId)}
-                                >
-                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                                  </svg>
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )
-                      })}
+                      {selectionMode
+                        ? order.items.map(item => renderItemRow(order, item))
+                        : buildDisplayRows(order.items).map(row => {
+                            if (row.kind === 'single') return renderItemRow(order, row.item)
+                            if (row.items.length === 1) return renderItemRow(order, row.items[0])
+                            return renderGroupHeader(order, row)
+                          })}
                     </div>
                   )
                 })}
@@ -612,21 +684,11 @@ function OrderPanel({
         </div>
       </div>
 
-      {/* ── Variant picker popup ── */}
-      {variantPickerProduct && (
-        <VariantPicker
-          product={variantPickerProduct}
-          variants={productVariants[variantPickerProduct.id] ?? []}
-          onSelect={handleVariantSelect}
-          onClose={() => setVariantPickerProduct(null)}
-        />
-      )}
-
-      {/* ── Customize modal (variant + modifiers) ── */}
+      {/* ── Customize modal (variant + modifiers + qty, single combined step) ── */}
       <ItemCustomizeModal
         open={!!customizeModal}
         product={customizeModal?.product}
-        variant={customizeModal?.variant}
+        variants={customizeModal?.variants || []}
         basePrice={customizeModal?.basePrice}
         initialModifiers={customizeModal?.initialModifiers || []}
         mode={customizeModal?.mode || 'add'}

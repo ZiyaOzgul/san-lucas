@@ -14,6 +14,7 @@ import {
   dedupeSyncedEntities, getAllActiveOrders,
   ensurePersistedActiveOrder, setOrderStatus, deleteActiveOrderCascade,
 } from '../lib/localDb.js'
+import { reopenOrder } from '../lib/reopenOperations.js'
 import { syncToSupabase, pullFromSupabase } from '../lib/sync.js'
 import { deleteProductImage, resetSupabaseData, supabase, isSupabaseReady } from '../lib/supabase.js'
 
@@ -723,6 +724,40 @@ export function AppProvider({ children }) {
     refreshLocalData()
   }, [ensureDb, refreshLocalData])
 
+  // ── Reopen a closed order (Kapananlar page) ───────────────────
+  // Correction mode cancels + restores stock/payments on the original order;
+  // "new order" mode leaves it untouched. Either way the selected items land
+  // as a fresh runtime group on the target table — the debounced persister
+  // above (not called directly here) materializes it into sql.js.
+  const reopenClosedOrder = useCallback(async ({ orderId, selectedItemIds, mode, targetTableId }) => {
+    try {
+      await ensureDb()
+      const group = await reopenOrder({ orderId, selectedItemIds, mode })
+      setRuntimeStates(prev => {
+        const existing = prev[targetTableId]
+        const base = existing ?? {
+          status: 'occupied',
+          type: 'normal',
+          openTime: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+          openedAt: new Date().toISOString(),
+          waiter: '—',
+          orders: [],
+        }
+        const orders = base.orders ?? []
+        const labeledGroup = { ...group, label: `Sipariş ${orders.length + 1}` }
+        return {
+          ...prev,
+          [targetTableId]: { ...base, status: 'occupied', orders: [...orders, labeledGroup] },
+        }
+      })
+      refreshLocalData()
+      syncIfOnline('reopen')
+    } catch (err) {
+      console.error('[AppContext] reopenClosedOrder failed', err)
+      throw err
+    }
+  }, [ensureDb, refreshLocalData, syncIfOnline])
+
   return (
     <AppContext.Provider value={{
       dbReady, dbError,
@@ -746,6 +781,8 @@ export function AppProvider({ children }) {
       isSyncing, lastSyncAt, unsyncedCount, triggerSync, refreshUnsyncedCount, isOnline,
       // Reset
       resetAllData, resetOnlineData,
+      // Reopen a closed order (correction / new order)
+      reopenClosedOrder,
       // Sync logs
       syncLogs,
       // Loyalty points

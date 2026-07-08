@@ -3,7 +3,7 @@ import './TablePickerModal.css'
 function TablePickerModal({
   open,
   tables = [],
-  mode = 'emptyOnly', // 'emptyOnly' | 'occupiedOnly'
+  mode = 'emptyOnly', // 'emptyOnly' | 'occupiedOnly' | 'all'
   excludeTableId = null,
   title = 'Masa Seç',
   subtitle = '',
@@ -56,6 +56,9 @@ function TablePickerModal({
                   onClick={() => onSelect(t)}
                 >
                   <div className="tpm-tile__name">{t.name}</div>
+                  {isOccupied && mode === 'all' && (
+                    <span className="tpm-tile__badge">Dolu — ayrı adisyon eklenir</span>
+                  )}
                   <div className="tpm-tile__status">
                     {isOccupied
                       ? `${itemCount} ürün · ₺${grpTotal.toLocaleString('tr-TR')}`

@@ -1264,7 +1264,7 @@ function Settings() {
               </h2>
               <div className="st-sistem-grid">
                 <div>
-                  <label className="settings-label">Sadakat Puanı</label>
+                  <label className="settings-label">San Lucas Puanı</label>
                   <p className="st-point-desc">
                     QR menüden sipariş veren üyeler, siparişleri ödendiğinde
                     ürünlerin puan değeri kadar puan kazanır. Kazanılan puanlar
