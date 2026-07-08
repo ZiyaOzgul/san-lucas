@@ -187,6 +187,37 @@
   color: var(--color-text-secondary);
 }
 .om-totals__row--discount { color: var(--color-success); }
+.om-totals__discount-label {
+  color: var(--color-success);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.om-totals__discount-label:hover { color: var(--color-success); opacity: 0.8; }
+.om-totals__discount-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-totals__discount-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  border-radius: 50%;
+}
+.om-totals__discount-remove:hover { background: var(--color-danger-light); color: var(--color-danger); }
+.om-totals__add-discount {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent-hover);
+  padding: 2px 0;
+}
+.om-totals__add-discount:hover { text-decoration: underline; }
 .om-totals__row--total {
   font-size: 15px;
   color: var(--color-text-primary);

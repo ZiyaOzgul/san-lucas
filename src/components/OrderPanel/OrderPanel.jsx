@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import ItemCustomizeModal from '../ItemCustomizeModal/ItemCustomizeModal.jsx'
 import TablePickerModal from '../TablePickerModal/TablePickerModal.jsx'
+import DiscountEditor from '../shared/DiscountEditor.jsx'
 import './OrderPanel.css'
 
 // Sum of modifier deltas for one line item, weighted by modifier quantity.
@@ -104,13 +105,14 @@ function VariantPicker({ product, variants, onSelect, onClose }) {
 function OrderPanel({
   table, tables = [],
   onClose, onCloseTable, onAddItem, onUpdateNote, onRemoveItem,
-  onPayOrder, onNewGroup, onMoveOrderToTable, onMoveItemsToTable,
+  onPayOrder, onNewGroup, onMoveOrderToTable, onMoveItemsToTable, onSetDiscount,
 }) {
   const { products, categories, productVariants } = useApp()
   const [search,               setSearch]               = useState('')
   const [activeCatId,          setActiveCatId]          = useState(null)
   const [pickerView,           setPickerView]           = useState('categories')
   const [variantPickerProduct, setVariantPickerProduct] = useState(null)
+  const [discountEditorOpen,   setDiscountEditorOpen]   = useState(false)
 
   // Customize modal flow (variant + modifiers)
   const [customizeModal, setCustomizeModal] = useState(null)
@@ -126,7 +128,7 @@ function OrderPanel({
   const orderItems = orders.flatMap(o => o.items)
   const subtotal   = orderItems.reduce((s, i) => s + i.qty * (i.unitPrice + modifiersSum(i.modifiers)), 0)
   const discount   = table.discount?.amount ?? 0
-  const total      = subtotal - discount
+  const total      = Math.max(0, subtotal - discount)
   const isOccupied = orderItems.length > 0
   // Primary manual order group (first one without supabaseOrderId, or first overall)
   const primaryGroup = orders.find(o => o.supabaseOrderId == null) ?? orders[0]
@@ -412,11 +414,38 @@ function OrderPanel({
                   <span>Ara Toplam</span>
                   <span>₺{subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
                 </div>
-                {discount > 0 && (
+                {discount > 0 && !discountEditorOpen && (
                   <div className="om-totals__row om-totals__row--discount">
-                    <span>{table.discount?.label ?? 'İndirim'}</span>
-                    <span>– ₺{discount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
+                    <button
+                      className="om-totals__discount-label"
+                      onClick={() => setDiscountEditorOpen(true)}
+                      title="İndirimi düzenle"
+                    >
+                      {table.discount?.label ?? 'İndirim'}
+                    </button>
+                    <span className="om-totals__discount-value">
+                      – ₺{discount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                      <button
+                        className="om-totals__discount-remove"
+                        title="İndirimi kaldır"
+                        onClick={() => onSetDiscount?.(table.id, null)}
+                      >✕</button>
+                    </span>
                   </div>
+                )}
+                {discount === 0 && !discountEditorOpen && (
+                  <button className="om-totals__add-discount" onClick={() => setDiscountEditorOpen(true)}>
+                    + İndirim Ekle
+                  </button>
+                )}
+                {discountEditorOpen && (
+                  <DiscountEditor
+                    subtotal={subtotal}
+                    initialAmount={table.discount?.amount ?? null}
+                    initialLabel={table.discount?.label ?? ''}
+                    onApply={(d) => { onSetDiscount?.(table.id, d); setDiscountEditorOpen(false) }}
+                    onCancel={() => setDiscountEditorOpen(false)}
+                  />
                 )}
                 <div className="om-totals__row om-totals__row--total">
                   <span>Toplam</span>

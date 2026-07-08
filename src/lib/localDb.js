@@ -1722,6 +1722,35 @@ export function getPaymentBreakdown(startIso, endIso) {
   ]
 }
 
+// Discount + points + gross/net revenue for the Reports payment breakdown card.
+// Points redemptions are stored per-payment (not on the order's amount columns),
+// so they're summed separately from the `payments` table.
+export function getPaymentMethodDetail(startIso, endIso) {
+  requireDb()
+  const { clause, params } = _dateClause(startIso, endIso)
+  const res = db.exec(
+    `SELECT COALESCE(SUM(discount),0), COALESCE(SUM(total),0)
+     FROM orders WHERE status='completed' ${clause}`,
+    params
+  )
+  const [discount, netRevenue] = res[0]?.values[0] ?? [0, 0]
+
+  const pointsRes = db.exec(
+    `SELECT COALESCE(SUM(p.amount),0)
+     FROM payments p JOIN orders o ON o.id = p.order_id
+     WHERE o.status='completed' AND p.payment_method='points' ${clause}`,
+    params
+  )
+  const points = pointsRes[0]?.values[0]?.[0] ?? 0
+
+  return {
+    discount,
+    points,
+    netRevenue,
+    grossRevenue: netRevenue + discount,
+  }
+}
+
 export function getTableRevenue(startIso, endIso) {
   requireDb()
   const { clause, params } = _dateClause(startIso, endIso)

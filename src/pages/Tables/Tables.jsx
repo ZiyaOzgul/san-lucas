@@ -360,6 +360,17 @@ function Tables() {
     })
   }
 
+  // discount: { amount, label } | null — OrderPanel/PaymentModal totals read table.discount,
+  // close flow persists it to orders.discount. paymentTable is a snapshot, so patch it too.
+  const handleSetDiscount = (tableId, discount) => {
+    setRuntimeStates(prev => {
+      const existing = prev[tableId]
+      if (!existing) return prev
+      return { ...prev, [tableId]: { ...existing, discount: discount ?? undefined } }
+    })
+    setPaymentTable(prev => (prev && prev.id === tableId) ? { ...prev, discount: discount ?? undefined } : prev)
+  }
+
   const handleUpdateQty = (tableId, itemId, newQty, subOrderLocalId) => {
     if (newQty <= 0) { handleRemoveItem(tableId, itemId, subOrderLocalId); return }
     setRuntimeStates(prev => {
@@ -874,6 +885,7 @@ function Tables() {
           onNewGroup={handleNewGroup}
           onMoveOrderToTable={handleMoveOrderToTable}
           onMoveItemsToTable={handleMoveItemsToTable}
+          onSetDiscount={handleSetDiscount}
           onPayOrder={(tableId, subOrderLocalId) => {
             const tbl = displayTables.find(t => t.id === tableId)
             const order = (runtimeStates[tableId]?.orders ?? []).find(o => o.localId === subOrderLocalId)
@@ -889,6 +901,7 @@ function Tables() {
           alreadyPaid={paymentOrder.paidAmount ?? 0}
           onClose={() => setPaymentOrder(null)}
           onComplete={handlePartialPaymentComplete}
+          onSetDiscount={handleSetDiscount}
         />
       )}
 
@@ -898,6 +911,7 @@ function Tables() {
           alreadyPaid={(paymentTable.orders ?? []).reduce((s, o) => s + (o.paidAmount || 0), 0)}
           onClose={() => setPaymentTable(null)}
           onComplete={handlePaymentComplete}
+          onSetDiscount={handleSetDiscount}
         />
       )}
 

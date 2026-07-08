@@ -282,6 +282,40 @@
   color: var(--color-text-primary);
 }
 
+/* ── Payment detail breakdown ── */
+.rpt-pay-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rpt-pay-detail__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.rpt-pay-detail__row span:last-child {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.rpt-pay-detail__row--discount span:last-child {
+  color: var(--color-danger);
+}
+
+.rpt-pay-detail__row--net span:last-child {
+  color: var(--color-accent);
+}
+
+.rpt-pay-detail__divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 2px 0;
+}
+
 /* ── Top products list ── */
 .rpt-top-list {
   list-style: none;

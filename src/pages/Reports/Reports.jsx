@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import {
   getReportKpis, getTopProduct, getRevenueByPeriod,
-  getPaymentBreakdown, getTableRevenue, getTopProducts, getProductSalesDetail,
+  getPaymentBreakdown, getPaymentMethodDetail, getTableRevenue, getTopProducts, getProductSalesDetail,
   getTableProductBreakdown, getProductTableBreakdown,
   getCategoryRevenue, getIngredientConsumption,
   getOrdersList, getOrderItems,
@@ -68,6 +68,7 @@ function Reports() {
   const [topProduct,   setTopProduct]   = useState({ name: '—', qty: 0 })
   const [periodData,   setPeriodData]   = useState([])
   const [paymentData,  setPaymentData]  = useState([{ name: 'Nakit', value: 0 }, { name: 'Kart', value: 0 }, { name: 'IBAN', value: 0 }])
+  const [paymentDetail, setPaymentDetail] = useState({ discount: 0, points: 0, netRevenue: 0, grossRevenue: 0 })
   const [tableRevData, setTableRevData] = useState([])
   const [topProducts,  setTopProducts]  = useState([])
   const [detailData,   setDetailData]   = useState([])
@@ -89,6 +90,7 @@ function Reports() {
     setTopProduct(getTopProduct(start, end))
     setPeriodData(getRevenueByPeriod(activeTab))
     setPaymentData(getPaymentBreakdown(start, end))
+    setPaymentDetail(getPaymentMethodDetail(start, end))
     setTableRevData(getTableRevenue(start, end))
     setTopProducts(getTopProducts(start, end))
     setDetailData(getProductSalesDetail(start, end))
@@ -299,6 +301,45 @@ function Reports() {
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="rpt-card">
+            <div className="rpt-card__header">
+              <span className="rpt-card__title">Ödeme Dağılımı (₺)</span>
+            </div>
+            <div className="rpt-pay-detail">
+              <div className="rpt-pay-detail__row">
+                <span>Nakit toplamı</span>
+                <span>{fmtCurrency(paymentData[0]?.value ?? 0)}</span>
+              </div>
+              <div className="rpt-pay-detail__row">
+                <span>Kart toplamı</span>
+                <span>{fmtCurrency(paymentData[1]?.value ?? 0)}</span>
+              </div>
+              <div className="rpt-pay-detail__row">
+                <span>İBAN toplamı</span>
+                <span>{fmtCurrency(paymentData[2]?.value ?? 0)}</span>
+              </div>
+              {paymentDetail.points > 0 && (
+                <div className="rpt-pay-detail__row">
+                  <span>Puan ile ödenen</span>
+                  <span>{fmtCurrency(paymentDetail.points)}</span>
+                </div>
+              )}
+              <div className="rpt-pay-detail__row rpt-pay-detail__row--discount">
+                <span>Toplam İndirim</span>
+                <span>– {fmtCurrency(paymentDetail.discount)}</span>
+              </div>
+              <div className="rpt-pay-detail__divider" />
+              <div className="rpt-pay-detail__row">
+                <span>Ciro (indirimsiz / brüt)</span>
+                <span>{fmtCurrency(paymentDetail.grossRevenue)}</span>
+              </div>
+              <div className="rpt-pay-detail__row rpt-pay-detail__row--net">
+                <span>Ciro (indirimli / net)</span>
+                <span>{fmtCurrency(paymentDetail.netRevenue)}</span>
               </div>
             </div>
           </div>

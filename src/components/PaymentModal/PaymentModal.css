@@ -250,6 +250,37 @@
   color: var(--color-accent);
   font-weight: 500;
 }
+.pm-totals__discount-label {
+  color: var(--color-accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.pm-totals__discount-label:hover { color: var(--color-accent-hover); }
+.pm-totals__discount-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pm-totals__discount-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  border-radius: 50%;
+}
+.pm-totals__discount-remove:hover { background: var(--color-danger-light); color: var(--color-danger); }
+.pm-totals__add-discount {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent-hover);
+  padding: 2px 0;
+}
+.pm-totals__add-discount:hover { text-decoration: underline; }
 
 /* ── RIGHT: Payment Panel ── */
 .pm-right {

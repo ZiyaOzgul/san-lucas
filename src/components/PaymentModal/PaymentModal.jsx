@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { getAllStaff } from '../../lib/localDb.js'
 import { supabase, supabaseAdmin, isSupabaseReady } from '../../lib/supabase.js'
 import { useApp } from '../../context/AppContext.jsx'
+import DiscountEditor from '../shared/DiscountEditor.jsx'
 import './PaymentModal.css'
 
 const MODES = [
@@ -57,9 +58,10 @@ function MethodPicker({ value, onChange }) {
   )
 }
 
-function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplete }) {
+function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplete, onSetDiscount }) {
   const { pointRate } = useApp()
   const [mode, setMode] = useState('single')
+  const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
 
   // ── Loyalty customer ───────────────────────────────────────────
   // QR orders carry the member's user_id in Supabase — resolve it to a
@@ -132,7 +134,7 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
   ) || 0)
   const subtotal  = items.reduce((s, i) => s + i.qty * itemUnit(i), 0)
   const discount  = table.discount?.amount ?? 0
-  const fullTotal = subtotal - discount
+  const fullTotal = Math.max(0, subtotal - discount)
   // Amount still owed — prior partial payments are already collected
   const paidSoFar = Math.min(Math.max(Number(alreadyPaid) || 0, 0), fullTotal)
   const total     = Math.round(Math.max(0, fullTotal - paidSoFar) * 100) / 100
@@ -492,11 +494,38 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
                 <span>Ara Toplam</span>
                 <span>₺{subtotal.toFixed(2)}</span>
               </div>
-              {discount > 0 && (
+              {discount > 0 && !discountEditorOpen && (
                 <div className="pm-totals__row pm-totals__row--discount">
-                  <span>{table.discount?.label ?? 'İndirim'}</span>
-                  <span>– ₺{discount.toFixed(2)}</span>
+                  <button
+                    className="pm-totals__discount-label"
+                    onClick={() => setDiscountEditorOpen(true)}
+                    title="İndirimi düzenle"
+                  >
+                    {table.discount?.label ?? 'İndirim'}
+                  </button>
+                  <span className="pm-totals__discount-value">
+                    – ₺{discount.toFixed(2)}
+                    <button
+                      className="pm-totals__discount-remove"
+                      title="İndirimi kaldır"
+                      onClick={() => onSetDiscount?.(table.id, null)}
+                    >✕</button>
+                  </span>
                 </div>
+              )}
+              {discount === 0 && !discountEditorOpen && (
+                <button className="pm-totals__add-discount" onClick={() => setDiscountEditorOpen(true)}>
+                  + İndirim Ekle
+                </button>
+              )}
+              {discountEditorOpen && (
+                <DiscountEditor
+                  subtotal={subtotal}
+                  initialAmount={table.discount?.amount ?? null}
+                  initialLabel={table.discount?.label ?? ''}
+                  onApply={(d) => { onSetDiscount?.(table.id, d); setDiscountEditorOpen(false) }}
+                  onCancel={() => setDiscountEditorOpen(false)}
+                />
               )}
               {paidSoFar > 0 && (
                 <div className="pm-totals__row pm-totals__row--paid">
