@@ -4,7 +4,7 @@ import ConfirmModal from '../../components/ConfirmModal/ConfirmModal.jsx'
 import { imageSrc } from '../../lib/imageSrc.js'
 import './Products.css'
 
-// â”€â”€ Add/Edit Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Add/Edit Modal ────────────────────────────────────────────────
 function ProductModal({
   product, categories, ingredients,
   existingVariants, existingProductIngredients,
@@ -14,7 +14,7 @@ function ProductModal({
   const isEdit = !!product
   // Stable id for a NEW product, minted once when the modal opens. Minting it
   // inside handleSave meant a double-click on "Kaydet" produced two different
-  // ids â†’ two duplicate products; with a stable id the second click is an
+  // ids → two duplicate products; with a stable id the second click is an
   // idempotent update of the same row.
   const [draftId] = useState(() => product?.id ?? Date.now())
   const [name,       setName]       = useState(product?.name       ?? '')
@@ -107,7 +107,7 @@ function ProductModal({
   const updateProductIngRow = (idx, field, value) =>
     setProductIngRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
 
-  // â”€â”€ Modifier helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Modifier helpers ────────────────────────────────────────────
   const categoryModifiers = (modifiers || []).filter(
     m => m.categoryId === Number(categoryId) && m.isActive
   )
@@ -163,7 +163,7 @@ function ProductModal({
         })),
       removedModIds,
       excludes: Array.from(productMatchExcludes),
-      // record explicit "not excluded" set too â€” caller compares against
+      // record explicit "not excluded" set too — caller compares against
       // initialExcludes to know which to delete from the table
       includedCategoryModIds: categoryModifiers
         .filter(m => !productMatchExcludes.has(m.id))
@@ -176,7 +176,7 @@ function ProductModal({
       <div className="modal product-modal product-modal--wide">
         <div className="modal__header">
           <h2 className="modal__title">{isEdit ? 'Ürünü Düzenle' : 'Yeni Ürün Ekle'}</h2>
-          <button className="modal__close" onClick={onClose}>âœ•</button>
+          <button className="modal__close" onClick={onClose}>✕</button>
         </div>
 
         <div className="product-modal__body">
@@ -194,12 +194,12 @@ function ProductModal({
               </select>
             </div>
             <div className="pm-field">
-              <label className="pm-label">Fiyat (â‚º) <span className="pm-label__hint">â€” Varyant yoksa</span></label>
+              <label className="pm-label">Fiyat (₺) <span className="pm-label__hint">— Varyant yoksa</span></label>
               <input className="pm-input" type="number" min="0" value={price} onChange={e => setPrice(e.target.value)} placeholder="0" />
             </div>
             <div className="pm-field">
               <label className="pm-label">
-                San Lucas PuanÄ±
+                San Lucas Puanı
                 <span className="pm-label__hint"> — Bu ürün her satıldığında müşteriye kazandırır</span>
               </label>
               <input
@@ -218,7 +218,7 @@ function ProductModal({
                 className="pm-input pm-textarea"
                 value={recipe}
                 onChange={e => setRecipe(e.target.value)}
-                placeholder="Malzemeler ve hazÄ±rlanÄ±ÅŸ..."
+                placeholder="Malzemeler ve hazırlanış..."
                 rows={3}
               />
             </div>
@@ -240,7 +240,7 @@ function ProductModal({
           </div>
         </div>
 
-        {/* â”€â”€ Variants section â”€â”€ */}
+        {/* ── Variants section ── */}
         <div className="pm-variants">
           <div className="pm-variants__header">
             <span className="pm-label">Varyantlar</span>
@@ -263,7 +263,7 @@ function ProductModal({
                   onChange={e => updateVariant(vIdx, 'name', e.target.value)}
                 />
                 <div className="pm-variant-row__price-wrap">
-                  <span className="pm-variant-row__currency">â‚º</span>
+                  <span className="pm-variant-row__currency">₺</span>
                   <input
                     className="pm-input pm-variant-row__price"
                     type="number"
@@ -273,7 +273,7 @@ function ProductModal({
                     onChange={e => updateVariant(vIdx, 'price', e.target.value)}
                   />
                 </div>
-                <button type="button" className="pm-variant-row__remove" onClick={() => removeVariant(vIdx)} title="VaryantÄ± sil">âœ•</button>
+                <button type="button" className="pm-variant-row__remove" onClick={() => removeVariant(vIdx)} title="Varyantı sil">✕</button>
               </div>
 
               {/* Ingredient recipe rows */}
@@ -300,8 +300,8 @@ function ProductModal({
                         value={r.amountUsed}
                         onChange={e => updateIngredientRow(vIdx, iIdx, 'amountUsed', e.target.value)}
                       />
-                      <span className="pm-recipe-row__unit">{selIng?.unit ?? 'â€”'}</span>
-                      <button type="button" className="pm-recipe-row__remove" onClick={() => removeIngredientRow(vIdx, iIdx)}>âœ•</button>
+                      <span className="pm-recipe-row__unit">{selIng?.unit ?? '—'}</span>
+                      <button type="button" className="pm-recipe-row__remove" onClick={() => removeIngredientRow(vIdx, iIdx)}>✕</button>
                     </div>
                   )
                 })}
@@ -313,7 +313,7 @@ function ProductModal({
           ))}
         </div>
 
-        {/* â”€â”€ Direct ingredient recipe (no variant needed) â”€â”€ */}
+        {/* ── Direct ingredient recipe (no variant needed) ── */}
         <div className="pm-variants">
           <div className="pm-variants__header">
             <span className="pm-label">Malzeme Reçetesi <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--color-text-muted)' }}>(varyant olmadan)</span></span>
@@ -349,15 +349,15 @@ function ProductModal({
                     value={r.amountUsed}
                     onChange={e => updateProductIngRow(idx, 'amountUsed', e.target.value)}
                   />
-                  <span className="pm-recipe-row__unit">{selIng?.unit ?? 'â€”'}</span>
-                  <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductIngRow(idx)}>âœ•</button>
+                  <span className="pm-recipe-row__unit">{selIng?.unit ?? '—'}</span>
+                  <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductIngRow(idx)}>✕</button>
                 </div>
               )
             })}
           </div>
         </div>
 
-        {/* â”€â”€ Modifiers (priced extras) â”€â”€ */}
+        {/* ── Modifiers (priced extras) ── */}
         <div className="pm-variants">
           <div className="pm-variants__header">
             <span className="pm-label">Ekstralar / Modifier</span>
@@ -384,7 +384,7 @@ function ProductModal({
                       <span className="pm-mod-cat-item__name">{m.name}</span>
                       {Number(m.priceDelta) !== 0 && (
                         <span className="pm-mod-cat-item__delta">
-                          {Number(m.priceDelta) > 0 ? '+' : 'â€“'}â‚º{Math.abs(Number(m.priceDelta)).toLocaleString('tr-TR')}
+                          {Number(m.priceDelta) > 0 ? '+' : '–'}₺{Math.abs(Number(m.priceDelta)).toLocaleString('tr-TR')}
                         </span>
                       )}
                     </label>
@@ -404,12 +404,12 @@ function ProductModal({
                   <div key={idx} className="pm-mod-row">
                     <input
                       className="pm-input pm-mod-row__name"
-                      placeholder="Ekstra adÄ±"
+                      placeholder="Ekstra adı"
                       value={m.name}
                       onChange={e => updateProductMod(idx, 'name', e.target.value)}
                     />
                     <div className="pm-mod-row__price-wrap">
-                      <span className="pm-mod-row__price-prefix">â‚º</span>
+                      <span className="pm-mod-row__price-prefix">₺</span>
                       <input
                         className="pm-input pm-mod-row__price"
                         type="number"
@@ -418,7 +418,7 @@ function ProductModal({
                         onChange={e => updateProductMod(idx, 'priceDelta', e.target.value)}
                       />
                     </div>
-                    <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductMod(idx)}>âœ•</button>
+                    <button type="button" className="pm-recipe-row__remove" onClick={() => removeProductMod(idx)}>✕</button>
                   </div>
                 ))}
               </div>
@@ -433,7 +433,7 @@ function ProductModal({
         </div>
 
         <div className="modal__footer">
-          <button className="btn btn--secondary" onClick={onClose}>Ä°ptal</button>
+          <button className="btn btn--secondary" onClick={onClose}>İptal</button>
           <button className="btn btn--primary" onClick={handleSave} disabled={!name.trim() || !price}>Kaydet</button>
         </div>
       </div>
@@ -441,7 +441,7 @@ function ProductModal({
   )
 }
 
-// â”€â”€ Read-only detail modal (card click) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Read-only detail modal (card click) ───────────────────────────
 function ProductViewModal({
   product, category, ingredients,
   variants, productIngredients,
@@ -457,16 +457,16 @@ function ProductViewModal({
   )
   const allMods = [...categoryMods, ...productMods]
 
-  const ingName = (id) => ingredients.find(i => String(i.id) === String(id))?.name ?? 'â€”'
+  const ingName = (id) => ingredients.find(i => String(i.id) === String(id))?.name ?? '—'
   const ingUnit = (id) => ingredients.find(i => String(i.id) === String(id))?.unit ?? ''
-  const fmtPrice = (n) => `â‚º${Number(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })}`
+  const fmtPrice = (n) => `₺${Number(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })}`
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal product-modal product-view">
         <div className="modal__header">
           <h2 className="modal__title">Ürün Detayı</h2>
-          <button className="modal__close" onClick={onClose}>âœ•</button>
+          <button className="modal__close" onClick={onClose}>✕</button>
         </div>
 
         <div className="product-view__body">
@@ -496,7 +496,7 @@ function ProductViewModal({
                 </div>
               )}
               <div className="product-view__row">
-                <span className="product-view__label">San Lucas PuanÄ±</span>
+                <span className="product-view__label">San Lucas Puanı</span>
                 <span className="product-view__value">{product.pointsValue > 0 ? `★ ${product.pointsValue}` : '—'}</span>
               </div>
             </div>
@@ -515,7 +515,7 @@ function ProductViewModal({
                 {v.ingredients.length > 0 && (
                   <ul className="product-view__ing-list">
                     {v.ingredients.map((r, i) => (
-                      <li key={i}>{ingName(r.ingredientId)} â€” {r.amountUsed} {ingUnit(r.ingredientId)}</li>
+                      <li key={i}>{ingName(r.ingredientId)} — {r.amountUsed} {ingUnit(r.ingredientId)}</li>
                     ))}
                   </ul>
                 )}
@@ -529,7 +529,7 @@ function ProductViewModal({
             <span className="pm-label">Malzeme Reçetesi</span>
             <ul className="product-view__ing-list">
               {productIngredients.map((r, i) => (
-                <li key={i}>{ingName(r.ingredientId)} â€” {r.amountUsed} {ingUnit(r.ingredientId)}</li>
+                <li key={i}>{ingName(r.ingredientId)} — {r.amountUsed} {ingUnit(r.ingredientId)}</li>
               ))}
             </ul>
           </div>
@@ -543,7 +543,7 @@ function ProductViewModal({
                 <span key={m.id} className="product-view__mod">
                   {m.name}
                   {Number(m.priceDelta) !== 0 && (
-                    <em>{Number(m.priceDelta) > 0 ? '+' : 'â€“'}â‚º{Math.abs(Number(m.priceDelta)).toLocaleString('tr-TR')}</em>
+                    <em>{Number(m.priceDelta) > 0 ? '+' : '–'}₺{Math.abs(Number(m.priceDelta)).toLocaleString('tr-TR')}</em>
                   )}
                 </span>
               ))}
@@ -567,7 +567,7 @@ function ProductViewModal({
   )
 }
 
-// â”€â”€ Main Products page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Main Products page ────────────────────────────────────────────
 function Products() {
   const {
     categories, products, productVariants, productIngredients, ingredients,
@@ -612,7 +612,7 @@ function Products() {
       await removeModifier(id)
     }
 
-    // Sync category-modifier excludes: write the truth from the modal â€”
+    // Sync category-modifier excludes: write the truth from the modal —
     // anything in `excludes` is excluded, anything not is included.
     const categoryModIds = modifiers
       .filter(m => m.categoryId === product.categoryId && m.isActive)
@@ -641,7 +641,7 @@ function Products() {
 
   return (
     <div className="page products-page">
-      {/* â”€â”€ Header â”€â”€ */}
+      {/* ── Header ── */}
       <div className="products-header">
         <div className="products-header__left">
           <h1 className="products-title">Ürünler</h1>
@@ -667,7 +667,7 @@ function Products() {
         </div>
       </div>
 
-      {/* â”€â”€ Category filter tabs â”€â”€ */}
+      {/* ── Category filter tabs ── */}
       <div className="products-tabs">
         <button
           className={`products-tab ${activeCatId === null ? 'products-tab--active' : ''}`}
@@ -693,14 +693,14 @@ function Products() {
         })}
       </div>
 
-      {/* â”€â”€ Product grid â”€â”€ */}
+      {/* ── Product grid ── */}
       <div className="products-grid">
         {filtered.map(product => {
           const cat      = getCategoryForProduct(product.categoryId)
           const variants = productVariants[product.id] ?? []
           const priceLabel = variants.length
-            ? `â‚º${Math.min(...variants.map(v => v.price)).toLocaleString('tr-TR')}${variants.length > 1 ? ' +' : ''}`
-            : `â‚º${product.price.toLocaleString('tr-TR')}`
+            ? `₺${Math.min(...variants.map(v => v.price)).toLocaleString('tr-TR')}${variants.length > 1 ? ' +' : ''}`
+            : `₺${product.price.toLocaleString('tr-TR')}`
           return (
             <div
               key={product.id}
@@ -735,7 +735,7 @@ function Products() {
                     <span className="product-card__variants-badge">{variants.length} varyant</span>
                   )}
                   {product.pointsValue > 0 && (
-                    <span className="product-card__points-badge" title="San Lucas PuanÄ±">
+                    <span className="product-card__points-badge" title="San Lucas Puanı">
                       ★ {product.pointsValue}
                     </span>
                   )}
@@ -771,7 +771,7 @@ function Products() {
         )}
       </div>
 
-      {/* â”€â”€ Read-only detail modal â”€â”€ */}
+      {/* ── Read-only detail modal ── */}
       {viewProduct && (
         <ProductViewModal
           product={viewProduct}
@@ -786,7 +786,7 @@ function Products() {
         />
       )}
 
-      {/* â”€â”€ Add/Edit Modal â”€â”€ */}
+      {/* ── Add/Edit Modal ── */}
       {editProduct !== undefined && (
         <ProductModal
           product={editProduct}

@@ -58,7 +58,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
       <div className="modal ingredient-modal">
         <div className="modal__header">
           <h2 className="modal__title">{isEdit ? 'Malzemeyi Düzenle' : 'Yeni Malzeme Ekle'}</h2>
-          <button className="modal__close" onClick={onClose}>âœ•</button>
+          <button className="modal__close" onClick={onClose}>✕</button>
         </div>
 
         <div className="ingredient-modal__body">
@@ -72,12 +72,12 @@ function IngredientModal({ ingredient, onSave, onClose }) {
               }
             </div>
             {imageUrl && (
-              <button className="ingredient-image-picker__remove" onClick={() => setImageUrl(null)}>Resmi kaldÄ±r</button>
+              <button className="ingredient-image-picker__remove" onClick={() => setImageUrl(null)}>Resmi kaldır</button>
             )}
           </div>
 
           <div className="pm-field">
-            <label className="pm-label">Malzeme AdÄ±</label>
+            <label className="pm-label">Malzeme Adı</label>
             <input className="pm-input" value={name} onChange={e => setName(e.target.value)} placeholder="ör. Espresso, Süt, Vanilya �?urubu" autoFocus />
           </div>
           <div className="pm-field">
@@ -90,7 +90,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
           {/* Container section */}
           <div className="pm-field-row">
             <div className="pm-field">
-              <label className="pm-label">Konteyner AdÄ± <span className="pm-label-hint">(isteÄŸe baÄŸlÄ±)</span></label>
+              <label className="pm-label">Konteyner Adı <span className="pm-label-hint">(isteğe bağlı)</span></label>
               <input
                 className="pm-input"
                 value={containerName}
@@ -124,7 +124,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
               />
             </div>
             <div className="pm-field">
-              <label className="pm-label">{hasContainer ? `Min. UyarÄ± (${containerName.trim()})` : 'Min. UyarÄ± EÅŸiÄŸi'}</label>
+              <label className="pm-label">{hasContainer ? `Min. Uyarı (${containerName.trim()})` : 'Min. Uyarı Eşiği'}</label>
               <input
                 className="pm-input"
                 type="number"
@@ -144,7 +144,7 @@ function IngredientModal({ ingredient, onSave, onClose }) {
         </div>
 
         <div className="modal__footer">
-          <button className="btn btn--secondary" onClick={onClose}>Ä°ptal</button>
+          <button className="btn btn--secondary" onClick={onClose}>İptal</button>
           <button className="btn btn--primary" onClick={handleSave} disabled={!name.trim()}>Kaydet</button>
         </div>
       </div>
@@ -172,7 +172,7 @@ function Ingredients() {
 
   return (
     <div className="page ingredients-page">
-      {/* â”€â”€ Header â”€â”€ */}
+      {/* ── Header ── */}
       <div className="ingredients-header">
         <div className="ingredients-header__left">
           <h1 className="ingredients-title">Malzemeler</h1>
@@ -201,7 +201,7 @@ function Ingredients() {
         </div>
       </div>
 
-      {/* â”€â”€ Grid â”€â”€ */}
+      {/* ── Grid ── */}
       <div className="ingredients-grid">
         {filtered.map(ing => {
           const isLow = ing.minStockAlert > 0 && ing.stockAmount <= ing.minStockAlert
@@ -299,7 +299,7 @@ function Ingredients() {
       <ConfirmModal
         open={!!confirmDel}
         title="Malzemeyi Sil"
-        message={confirmDel ? `"${confirmDel.name}" malzemesini silmek istediÄŸinizden emin misiniz? Bu iÅŸlem geri alÄ±namaz.` : ''}
+        message={confirmDel ? `"${confirmDel.name}" malzemesini silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.` : ''}
         confirmText="Sil"
         onConfirm={async () => {
           const id = confirmDel?.id
