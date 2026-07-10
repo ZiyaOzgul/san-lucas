@@ -357,3 +357,10 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.reo-footer__noperm {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  align-self: center;
+  margin-right: 8px;
+}

@@ -89,32 +89,9 @@ function Toggle({ checked, onChange }) {
 
 // ── Permission config ──────────────────────────────────────────────
 
-const PERMISSION_GROUPS = [
-  {
-    label: 'Sayfalar',
-    items: [
-      { key: 'tables',        label: 'Masalar',            desc: 'Masa görüntüleme ve yönetimi' },
-      { key: 'orders',        label: 'Siparişler',         desc: 'Sipariş geçmişini görüntüle' },
-      { key: 'products_view', label: 'Ürünleri Görüntüle', desc: 'Ürün listesine erişim' },
-      { key: 'products_edit', label: 'Ürünleri Düzenle',   desc: 'Ürün ekle, güncelle, sil' },
-      { key: 'reports',       label: 'Raporlar',           desc: 'Satış ve performans raporları' },
-      { key: 'settings',      label: 'Ayarlar',            desc: 'Sistem ayarlarına erişim' },
-    ],
-  },
-  {
-    label: 'İşlemler',
-    items: [
-      { key: 'close_table',    label: 'Masa Kapat / Ödeme Al', desc: 'Hesap al ve masayı kapat' },
-      { key: 'apply_discount', label: 'İndirim Uygula',        desc: 'Sipariş üzerine indirim ekle' },
-      { key: 'cancel_order',   label: 'Sipariş İptal',         desc: 'Aktif siparişi iptal et' },
-    ],
-  },
-]
-
-const DEFAULT_PERMISSIONS = {
-  tables: true, orders: true, products_view: true, products_edit: false,
-  reports: false, settings: false, apply_discount: false, cancel_order: false, close_table: true,
-}
+// Tek kaynak: src/lib/permissions.js — yeni izin anahtarları oraya eklenir,
+// bu modal otomatik gösterir.
+import { PERMISSION_GROUPS, DEFAULT_PERMISSIONS } from '../../lib/permissions.js'
 
 // ── Add / Edit Modal ───────────────────────────────────────────────
 

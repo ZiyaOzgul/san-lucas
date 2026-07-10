@@ -4,6 +4,7 @@ import ItemCustomizeModal from '../ItemCustomizeModal/ItemCustomizeModal.jsx'
 import TablePickerModal from '../TablePickerModal/TablePickerModal.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
 import { buildDisplayRows } from '../../lib/itemGrouping.js'
+import { hasPerm } from '../../lib/permissions.js'
 import './OrderPanel.css'
 
 // Sum of modifier deltas for one line item, weighted by modifier quantity.
@@ -78,7 +79,9 @@ function OrderPanel({
   onClose, onCloseTable, onAddItem, onUpdateNote, onRemoveItem,
   onPayOrder, onNewGroup, onMoveOrderToTable, onMoveItemsToTable, onSetDiscount,
 }) {
-  const { products, categories, productVariants } = useApp()
+  const { products, categories, productVariants, currentUser } = useApp()
+  const canDiscount = hasPerm(currentUser, 'apply_discount')
+  const canClose    = hasPerm(currentUser, 'close_table')
   const [search,               setSearch]               = useState('')
   const [activeCatId,          setActiveCatId]          = useState(null)
   const [pickerView,           setPickerView]           = useState('categories')
@@ -420,10 +423,10 @@ function OrderPanel({
                           <span className="om-order-group__label">{order.label}</span>
                           {isActive && <span className="om-order-group__active-dot" />}
                           <span className="om-order-group__subtotal">₺{grpSubtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}</span>
-                          <button
+                          {canClose && <button
                             className="om-order-group__pay-btn"
                             onClick={() => onPayOrder(table.id, order.localId)}
-                          >Öde</button>
+                          >Öde</button>}
                         </div>
                       )}
                       {selectionMode
@@ -452,27 +455,27 @@ function OrderPanel({
                   <div className="om-totals__row om-totals__row--discount">
                     <button
                       className="om-totals__discount-label"
-                      onClick={() => setDiscountEditorOpen(true)}
-                      title="İndirimi düzenle"
+                      onClick={canDiscount ? () => setDiscountEditorOpen(true) : undefined}
+                      title={canDiscount ? 'İndirimi düzenle' : undefined}
                     >
                       {table.discount?.label ?? 'İndirim'}
                     </button>
                     <span className="om-totals__discount-value">
                       – ₺{discount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
-                      <button
+                      {canDiscount && <button
                         className="om-totals__discount-remove"
                         title="İndirimi kaldır"
                         onClick={() => onSetDiscount?.(table.id, null)}
-                      >✕</button>
+                      >✕</button>}
                     </span>
                   </div>
                 )}
-                {discount === 0 && !discountEditorOpen && (
+                {canDiscount && discount === 0 && !discountEditorOpen && (
                   <button className="om-totals__add-discount" onClick={() => setDiscountEditorOpen(true)}>
                     + İndirim Ekle
                   </button>
                 )}
-                {discountEditorOpen && (
+                {canDiscount && discountEditorOpen && (
                   <DiscountEditor
                     subtotal={subtotal}
                     initialAmount={table.discount?.amount ?? null}
@@ -533,14 +536,14 @@ function OrderPanel({
                 >
                   + Yeni Sipariş
                 </button>
-                <button
+                {canClose && <button
                   className="btn btn--primary btn--full"
                   disabled={!isOccupied}
                   onClick={onCloseTable}
                   style={!isOccupied ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
                 >
                   Masayı Kapat
-                </button>
+                </button>}
               </>
             )}
           </div>

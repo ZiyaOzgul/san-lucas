@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../context/AppContext.jsx'
 import TablePickerModal from '../TablePickerModal/TablePickerModal.jsx'
+import { hasPerm } from '../../lib/permissions.js'
 import './ReopenModal.css'
 
 const MODES = [
@@ -31,7 +32,8 @@ function fmt(n) {
 }
 
 function ReopenModal({ order, onClose }) {
-  const { reopenClosedOrder, tableDefs, runtimeStates } = useApp()
+  const { reopenClosedOrder, tableDefs, runtimeStates, currentUser } = useApp()
+  const canReopen = hasPerm(currentUser, 'reopen_table')
   const navigate = useNavigate()
 
   const [selectedIds, setSelectedIds] = useState(() => new Set(order.items.map(i => i.id)))
@@ -65,7 +67,7 @@ function ReopenModal({ order, onClose }) {
     .filter(i => selectedIds.has(i.id))
     .reduce((s, i) => s + i.qty * itemUnit(i), 0)
 
-  const canConfirm = !!mode && selectedIds.size > 0 && !submitting
+  const canConfirm = canReopen && !!mode && selectedIds.size > 0 && !submitting
 
   const handleConfirm = async () => {
     if (!canConfirm) return
@@ -173,6 +175,7 @@ function ReopenModal({ order, onClose }) {
             <strong>{fmt(selectedTotal)}</strong>
           </div>
           <div className="reo-footer__actions">
+            {!canReopen && <span className="reo-footer__noperm">Yeniden açma yetkiniz yok</span>}
             <button className="reo-btn reo-btn--cancel" onClick={onClose}>İptal</button>
             <button
               className={`reo-btn reo-btn--confirm${!canConfirm ? ' reo-btn--disabled' : ''}`}

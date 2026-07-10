@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase, isSupabaseReady } from '../../lib/supabase.js'
+import { isDbInitialized, findStaffForAuth } from '../../lib/localDb.js'
 import './Login.css'
 
 function withTimeout(promise, ms, label) {
@@ -12,10 +13,11 @@ function withTimeout(promise, ms, label) {
 }
 
 function Login({ onLogin }) {
-  const [email,    setEmail]    = useState('')
-  const [password, setPassword] = useState('')
-  const [error,    setError]    = useState('')
-  const [loading,  setLoading]  = useState(false)
+  const [email,      setEmail]      = useState('')
+  const [password,   setPassword]   = useState('')
+  const [error,      setError]      = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [rememberMe, setRememberMe] = useState(true)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -88,7 +90,23 @@ function Login({ onLogin }) {
         can_close_tables:    profile?.can_close_tables    ?? false,
         can_manage_products: profile?.can_manage_products ?? false,
       }
+      // Yerel personel kaydındaki izinleri bağla (izin düzenlemeleri bir
+      // sonraki girişte devreye girer; admin hasPerm'de her zaman geçer)
+      try {
+        if (isDbInitialized()) {
+          const staffRow = findStaffForAuth(finalUser.id, finalUser.email)
+          if (staffRow) finalUser.permissions = staffRow.permissions
+        }
+      } catch (e) {
+        console.warn('[Login] personel izinleri okunamadı', e)
+      }
       console.log('[Login] onLogin →', finalUser)
+      try {
+        localStorage.setItem('san-lucas-remember-me', rememberMe ? '1' : '0')
+        localStorage.setItem('san-lucas-cached-user', JSON.stringify(finalUser))
+      } catch (e) {
+        console.warn('[Login] localStorage yazılamadı', e)
+      }
       onLogin(finalUser)
     } catch (err) {
       console.error('[Login] hata', err)
@@ -143,6 +161,15 @@ function Login({ onLogin }) {
               required
             />
           </div>
+
+          <label className="login-remember">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={e => setRememberMe(e.target.checked)}
+            />
+            <span>Beni hatırla</span>
+          </label>
 
           {error && <p className="login-error">{error}</p>}
 

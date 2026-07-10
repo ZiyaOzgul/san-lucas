@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import './styles/layout.css'
 import { AppProvider, useApp } from './context/AppContext.jsx'
+import { hasPerm, firstAllowedRoute } from './lib/permissions.js'
 import Navbar from './components/Navbar/Navbar.jsx'
 import useOnlineStatus from './hooks/useOnlineStatus.js'
 import Tables from './pages/Tables/Tables.jsx'
@@ -13,6 +14,25 @@ import Staff from './pages/Staff/Staff.jsx'
 import Settings from './pages/Settings/Settings.jsx'
 import Login from './pages/Login/Login.jsx'
 import ClosedTables from './pages/ClosedTables/ClosedTables.jsx'
+
+// Rota koruması: izin yoksa kullanıcının erişebildiği ilk sayfaya yönlendir.
+// permKey null → sadece admin (Personel sayfası).
+function RequireP({ permKey, children }) {
+  const { currentUser } = useApp()
+  const location = useLocation()
+  const allowed = permKey === null
+    ? currentUser?.role === 'admin'
+    : hasPerm(currentUser, permKey)
+  if (!allowed) {
+    const target = firstAllowedRoute(currentUser)
+    // Hiçbir sayfaya izni yoksa yönlendirme döngüsüne girme — mesaj göster
+    if (target === location.pathname) {
+      return <div className="db-loading">Bu sayfaya erişim yetkiniz yok. Yöneticinizle iletişime geçin.</div>
+    }
+    return <Navigate to={target} replace />
+  }
+  return children
+}
 
 function AppShell() {
   const { dbReady, dbError, triggerSync } = useApp()
@@ -50,14 +70,14 @@ function AppShell() {
           </div>
         )}
         <Routes>
-          <Route path="/"         element={<Tables />} />
-          <Route path="/orders"   element={<Orders />} />
-          <Route path="/closed-tables" element={<ClosedTables />} />
-          <Route path="/products"    element={<Products />} />
-          <Route path="/ingredients" element={<Ingredients />} />
-          <Route path="/reports"     element={<Reports />} />
-          <Route path="/staff"       element={<Staff />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/"         element={<RequireP permKey="tables"><Tables /></RequireP>} />
+          <Route path="/orders"   element={<RequireP permKey="orders"><Orders /></RequireP>} />
+          <Route path="/closed-tables" element={<RequireP permKey="closed_tables"><ClosedTables /></RequireP>} />
+          <Route path="/products"    element={<RequireP permKey="products_view"><Products /></RequireP>} />
+          <Route path="/ingredients" element={<RequireP permKey="ingredients"><Ingredients /></RequireP>} />
+          <Route path="/reports"     element={<RequireP permKey="reports"><Reports /></RequireP>} />
+          <Route path="/staff"       element={<RequireP permKey={null}><Staff /></RequireP>} />
+          <Route path="/settings" element={<RequireP permKey="settings"><Settings /></RequireP>} />
         </Routes>
       </div>
     </div>

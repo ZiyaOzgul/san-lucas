@@ -1,19 +1,25 @@
 import { NavLink } from 'react-router-dom'
+import { useApp } from '../../context/AppContext.jsx'
+import { hasPerm } from '../../lib/permissions.js'
 import './Navbar.css'
 
+// permKey: hasPerm anahtarı; 'admin' → sadece yönetici görür
 const NAV_ITEMS = [
   {
     to: '/',
+    permKey: 'tables',
     label: 'Masalar',
     icon: <img src="./icons/tables.png" alt="" className="navbar__icon-img" />,
   },
   {
     to: '/orders',
+    permKey: 'orders',
     label: 'Siparişler',
     icon: <img src="./icons/orders.png" alt="" className="navbar__icon-img" />,
   },
   {
     to: '/closed-tables',
+    permKey: 'closed_tables',
     label: 'Kapananlar',
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -25,11 +31,13 @@ const NAV_ITEMS = [
   },
   {
     to: '/products',
+    permKey: 'products_view',
     label: 'Ürünler',
     icon: <img src="./icons/products.png" alt="" className="navbar__icon-img" />,
   },
   {
     to: '/ingredients',
+    permKey: 'ingredients',
     label: 'Malzemeler',
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -39,11 +47,13 @@ const NAV_ITEMS = [
   },
   {
     to: '/reports',
+    permKey: 'reports',
     label: 'Raporlar',
     icon: <img src="./icons/monitor.png" alt="" className="navbar__icon-img" />,
   },
   {
     to: '/staff',
+    permKey: 'admin',
     label: 'Çalışanlar',
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -57,6 +67,11 @@ const NAV_ITEMS = [
 ]
 
 function Navbar() {
+  const { currentUser } = useApp()
+  const visibleItems = NAV_ITEMS.filter(item =>
+    item.permKey === 'admin' ? currentUser?.role === 'admin' : hasPerm(currentUser, item.permKey)
+  )
+  const canSettings = hasPerm(currentUser, 'settings')
 
   return (
     <nav className="navbar">
@@ -72,7 +87,7 @@ function Navbar() {
       </div>
 
       <ul className="navbar__items">
-        {NAV_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <li key={item.to}>
             <NavLink
               to={item.to}
@@ -89,7 +104,7 @@ function Navbar() {
       </ul>
 
       <div className="navbar__bottom">
-        <NavLink
+        {canSettings && <NavLink
           to="/settings"
           className={({ isActive }) =>
             `navbar__item${isActive ? ' navbar__item--active' : ''}`
@@ -102,7 +117,7 @@ function Navbar() {
             </svg>
           </span>
           <span className="navbar__label">Ayarlar</span>
-        </NavLink>
+        </NavLink>}
         <p className="navbar__tagline">San Lucas Cafe POS</p>
       </div>
     </nav>

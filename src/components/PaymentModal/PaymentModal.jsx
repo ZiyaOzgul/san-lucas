@@ -3,6 +3,7 @@ import { getAllStaff } from '../../lib/localDb.js'
 import { supabase, supabaseAdmin, isSupabaseReady } from '../../lib/supabase.js'
 import { useApp } from '../../context/AppContext.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
+import { hasPerm } from '../../lib/permissions.js'
 import { buildDisplayRows } from '../../lib/itemGrouping.js'
 import './PaymentModal.css'
 
@@ -60,7 +61,8 @@ function MethodPicker({ value, onChange }) {
 }
 
 function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplete, onSetDiscount }) {
-  const { pointRate } = useApp()
+  const { pointRate, currentUser } = useApp()
+  const canDiscount = hasPerm(currentUser, 'apply_discount')
   const [mode, setMode] = useState('single')
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
 
@@ -607,27 +609,27 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
                 <div className="pm-totals__row pm-totals__row--discount">
                   <button
                     className="pm-totals__discount-label"
-                    onClick={() => setDiscountEditorOpen(true)}
-                    title="İndirimi düzenle"
+                    onClick={canDiscount ? () => setDiscountEditorOpen(true) : undefined}
+                    title={canDiscount ? 'İndirimi düzenle' : undefined}
                   >
                     {table.discount?.label ?? 'İndirim'}
                   </button>
                   <span className="pm-totals__discount-value">
                     – ₺{discount.toFixed(2)}
-                    <button
+                    {canDiscount && <button
                       className="pm-totals__discount-remove"
                       title="İndirimi kaldır"
                       onClick={() => onSetDiscount?.(table.id, null)}
-                    >✕</button>
+                    >✕</button>}
                   </span>
                 </div>
               )}
-              {discount === 0 && !discountEditorOpen && (
+              {canDiscount && discount === 0 && !discountEditorOpen && (
                 <button className="pm-totals__add-discount" onClick={() => setDiscountEditorOpen(true)}>
                   + İndirim Ekle
                 </button>
               )}
-              {discountEditorOpen && (
+              {canDiscount && discountEditorOpen && (
                 <DiscountEditor
                   subtotal={subtotal}
                   initialAmount={table.discount?.amount ?? null}

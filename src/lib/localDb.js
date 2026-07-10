@@ -2027,17 +2027,8 @@ export function getOrderItems(orderId) {
 
 // ── staff CRUD (LOCAL ONLY) ───────────────────────────────────────
 
-const DEFAULT_PERMISSIONS = {
-  tables: true,
-  orders: true,
-  products_view: true,
-  products_edit: false,
-  reports: false,
-  settings: false,
-  apply_discount: false,
-  cancel_order: false,
-  close_table: true,
-}
+// Tek kaynak: src/lib/permissions.js (yeni anahtarlar otomatik yansır)
+import { DEFAULT_PERMISSIONS } from './permissions.js'
 
 export function getAllStaff() {
   requireDb()
@@ -2054,6 +2045,17 @@ export function getAllStaff() {
     permissions: (() => { try { return { ...DEFAULT_PERMISSIONS, ...JSON.parse(permissions || '{}') } } catch { return { ...DEFAULT_PERMISSIONS } } })(),
     createdAt: created_at,
   }))
+}
+
+// Giriş yapan Supabase kullanıcısını yerel personel kaydıyla eşler
+// (önce supabase_uid, yoksa e-posta). Kayıt yoksa null — çağıran
+// önbellek/varsayılan izinlere düşer.
+export function findStaffForAuth(supabaseUid, email) {
+  if (!db) return null
+  const all = getAllStaff()
+  return all.find(s => s.supabaseUid && supabaseUid && s.supabaseUid === supabaseUid)
+      ?? all.find(s => s.email && email && s.email.toLowerCase() === email.toLowerCase())
+      ?? null
 }
 
 export async function insertStaff({ name, role = 'Garson', contact = '', email = '', supabaseUid = null, permissions = {} }) {

@@ -13,14 +13,55 @@ import {
   getUnsyncedCount, clearAllDataExceptTables,
   dedupeSyncedEntities, getAllActiveOrders,
   ensurePersistedActiveOrder, setOrderStatus, deleteActiveOrderCascade,
+  findStaffForAuth,
 } from '../lib/localDb.js'
 import { reopenOrder } from '../lib/reopenOperations.js'
 import { syncToSupabase, pullFromSupabase } from '../lib/sync.js'
 import { deleteProductImage, resetSupabaseData, supabase, isSupabaseReady } from '../lib/supabase.js'
 
+const CACHED_USER_KEY = 'san-lucas-cached-user'
+
+function readCachedUser(authUserId) {
+  try {
+    const raw = localStorage.getItem(CACHED_USER_KEY)
+    if (!raw) return null
+    const cached = JSON.parse(raw)
+    return cached?.id === authUserId ? cached : null
+  } catch (e) {
+    console.warn('[Auth] önbellek profili okunamadı', e)
+    return null
+  }
+}
+
+function writeCachedUser(user) {
+  try {
+    localStorage.setItem(CACHED_USER_KEY, JSON.stringify(user))
+  } catch (e) {
+    console.warn('[Auth] önbellek profili yazılamadı', e)
+  }
+}
+
+// Yerel personel kaydındaki izinleri kullanıcıya bağlar. DB henüz hazır
+// değilse dokunmaz — önbellekteki izinler (varsa) korunur, hasPerm admin'i
+// her durumda geçirir. İzin düzenlemeleri personelin bir sonraki girişinde
+// devreye girer.
+function attachStaffPermissions(user) {
+  if (!user) return user
+  try {
+    if (isDbInitialized()) {
+      const staffRow = findStaffForAuth(user.id, user.email)
+      if (staffRow) return { ...user, permissions: staffRow.permissions }
+    }
+  } catch (e) {
+    console.warn('[Auth] personel izinleri okunamadı', e)
+  }
+  return user
+}
+
 async function fetchProfileForUser(authUser) {
   if (!authUser) return null
   let profile = null
+  let profileFailed = false
   if (isSupabaseReady) {
     try {
       const result = await Promise.race([
@@ -35,19 +76,43 @@ async function fetchProfileForUser(authUser) {
         }, 8000)),
       ])
       profile = result?.data ?? null
+      if (result?.__timedOut) profileFailed = true
     } catch (e) {
       console.warn('[Auth] profiles sorgusu hata verdi — varsayılan profil ile devam ediliyor', e)
+      profileFailed = true
     }
   }
-  return {
+  if (profile) {
+    const user = attachStaffPermissions({
+      id:                  authUser.id,
+      email:               authUser.email,
+      full_name:           profile.full_name ?? null,
+      role:                profile.role ?? 'waiter',
+      can_take_orders:     profile.can_take_orders     ?? true,
+      can_close_tables:    profile.can_close_tables    ?? false,
+      can_manage_products: profile.can_manage_products ?? false,
+    })
+    writeCachedUser(user)
+    return user
+  }
+  // Profile fetch timed out or errored — prefer the last known cached profile
+  // for this same user over silently downgrading them to hardcoded defaults.
+  if (profileFailed) {
+    const cached = readCachedUser(authUser.id)
+    if (cached) {
+      console.log('[Auth] profiles sorgusu başarısız — önbellekteki profil kullanılıyor')
+      return attachStaffPermissions({ ...cached, id: authUser.id, email: authUser.email })
+    }
+  }
+  return attachStaffPermissions({
     id:                  authUser.id,
     email:               authUser.email,
-    full_name:           profile?.full_name ?? null,
-    role:                profile?.role ?? 'waiter',
-    can_take_orders:     profile?.can_take_orders     ?? true,
-    can_close_tables:    profile?.can_close_tables    ?? false,
-    can_manage_products: profile?.can_manage_products ?? false,
-  }
+    full_name:           null,
+    role:                'waiter',
+    can_take_orders:     true,
+    can_close_tables:    false,
+    can_manage_products: false,
+  })
 }
 
 const AppContext = createContext(null)
@@ -96,6 +161,7 @@ export function AppProvider({ children }) {
     if (isSupabaseReady) {
       try { await supabase.auth.signOut() } catch (e) { console.error('[Auth] signOut failed', e) }
     }
+    localStorage.removeItem(CACHED_USER_KEY)
     setCurrentUser(null)
   }, [])
 
@@ -104,6 +170,15 @@ export function AppProvider({ children }) {
     if (!isSupabaseReady) { setAuthReady(true); return }
     let mounted = true
     ;(async () => {
+      // "Beni hatırla" unchecked at last login → don't auto-restore the
+      // persisted Supabase session; drop it and send the user to Login.
+      // Missing key (existing installs) defaults to remember=true.
+      if (localStorage.getItem('san-lucas-remember-me') === '0') {
+        try { await supabase.auth.signOut() } catch (e) { console.warn('[Auth] remember-me=0 signOut failed', e) }
+        localStorage.removeItem(CACHED_USER_KEY)
+        if (mounted) setAuthReady(true)
+        return
+      }
       try {
         // Guard: if getSession ever hangs (e.g. corrupt storage), fall through to
         // login after 12s instead of leaving the app on a permanent white screen.

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import ConfirmModal from '../../components/ConfirmModal/ConfirmModal.jsx'
 import { imageSrc } from '../../lib/imageSrc.js'
+import { hasPerm } from '../../lib/permissions.js'
 import './Products.css'
 
 // ── Add/Edit Modal ────────────────────────────────────────────────
@@ -560,7 +561,7 @@ function ProductViewModal({
 
         <div className="modal__footer">
           <button className="btn btn--secondary" onClick={onClose}>Kapat</button>
-          <button className="btn btn--primary" onClick={onEdit}>Düzenle</button>
+          {onEdit && <button className="btn btn--primary" onClick={onEdit}>Düzenle</button>}
         </div>
       </div>
     </div>
@@ -573,7 +574,9 @@ function Products() {
     categories, products, productVariants, productIngredients, ingredients,
     saveProduct, removeProduct, saveVariants, saveProductIngredients,
     modifiers, saveModifier, removeModifier, setModifierExcluded, productModifierExcludes,
+    currentUser,
   } = useApp()
+  const canEdit = hasPerm(currentUser, 'products_edit')
 
   const [activeCatId, setActiveCatId] = useState(null)
   const [search,      setSearch]      = useState('')
@@ -658,12 +661,12 @@ function Products() {
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          <button className="btn-add-product" onClick={() => setEditProduct(null)}>
+          {canEdit && <button className="btn-add-product" onClick={() => setEditProduct(null)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
             Ürün Ekle
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -743,7 +746,7 @@ function Products() {
               </div>
 
               {/* Hover actions */}
-              {hoveredId === product.id && (
+              {canEdit && hoveredId === product.id && (
                 <div className="product-card__actions" onClick={e => e.stopPropagation()}>
                   <button className="product-card__action-btn" onClick={() => setEditProduct(product)} title="Düzenle">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -782,7 +785,7 @@ function Products() {
           modifiers={modifiers}
           excludes={productModifierExcludes(viewProduct.id)}
           onClose={() => setViewProduct(null)}
-          onEdit={() => { setEditProduct(viewProduct); setViewProduct(null) }}
+          onEdit={canEdit ? () => { setEditProduct(viewProduct); setViewProduct(null) } : null}
         />
       )}
 
