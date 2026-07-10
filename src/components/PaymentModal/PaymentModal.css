@@ -1170,3 +1170,59 @@
   cursor: default;
 }
 
+/* ── Grouped items (display-only, unpaid items with matching signature) ──
+   Visual language mirrors OrderPanel's .om-item-group__* classes. ── */
+.pm-item-group__header {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.pm-item-group__qty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.pm-item-group__chevron {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted, #9ca3af);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.pm-item-group__chevron--open {
+  transform: rotate(90deg);
+  color: var(--color-text-primary, #1a1a2e);
+}
+
+.pm-item__mods-summary {
+  font-size: 11px;
+  color: var(--color-accent, #e8975a);
+  font-weight: 700;
+  margin-top: 2px;
+  letter-spacing: 0.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-item-group__children {
+  padding-left: 20px;
+  border-left: 2px solid var(--color-border, #e5e7eb);
+  margin-left: 12px;
+}
+
+.pm-item-group__children .pm-item {
+  padding: 8px 12px;
+}
+

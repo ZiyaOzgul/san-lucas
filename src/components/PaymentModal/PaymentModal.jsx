@@ -3,6 +3,7 @@ import { getAllStaff } from '../../lib/localDb.js'
 import { supabase, supabaseAdmin, isSupabaseReady } from '../../lib/supabase.js'
 import { useApp } from '../../context/AppContext.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
+import { buildDisplayRows } from '../../lib/itemGrouping.js'
 import './PaymentModal.css'
 
 const MODES = [
@@ -125,6 +126,16 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
   const [itemSel,    setItemSel]    = useState(new Map())
   const [itemMethod, setItemMethod] = useState('cash')
   const [itemParts,  setItemParts]  = useState([])
+
+  // Display-only grouping of identical unpaid items (same helper OrderPanel
+  // uses) — a group row can be expanded to select its members individually.
+  const [expandedGroups, setExpandedGroups] = useState(new Set())
+  const toggleGroupExpanded = (key) => setExpandedGroups(prev => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
 
   const items = partialOrder ? partialOrder.items : (table.orderItems || [])
   const unpaidItems = items.filter(i => !i.paid)
@@ -333,6 +344,25 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
     return next
   })
 
+  // Group header click — same rule as toggleItemSel, applied to every
+  // selectable (unpaid, not-fully-reserved) member at once. If any member
+  // is already selected the whole group is cleared; otherwise every
+  // member is selected up to its own available quantity. Never touches
+  // items outside the group, and never invents ids beyond real item ids.
+  const toggleGroupSel = (members) => setItemSel(prev => {
+    const next = new Map(prev)
+    const anySelected = members.some(m => next.has(m.id))
+    if (anySelected) {
+      members.forEach(m => next.delete(m.id))
+    } else {
+      members.forEach(m => {
+        const avail = availableQty(m)
+        if (avail > 0) next.set(m.id, avail)
+      })
+    }
+    return next
+  })
+
   // Freeze the current selection as a payment part with its own method,
   // then let the user pick more items for the next method.
   const addItemPart = () => {
@@ -403,6 +433,118 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
   // Minted once per modal open — impure call in render would regenerate it
   const [transactionId] = useState(() => `POS-${Math.floor(10000 + Math.random() * 90000)}-TX`)
 
+  // ── Item row rendering ───────────────────────────────────────────
+  // Single line item — identical markup/behavior as before grouping was
+  // introduced. Used both for standalone rows and for the expanded
+  // children of a multi-item group.
+  const renderItemRow = (item, altIdx) => {
+    const isPaid = !!item.paid
+    const reserved = isPaid ? 0 : reservedQty(item.id)
+    const fullyReserved = !isPaid && reserved >= item.qty
+    const selQty = isPaid ? 0 : (itemSel.get(item.id) || 0)
+    const selected = selQty > 0
+    const clickable = !isPaid && !fullyReserved
+    return (
+      <div
+        key={item.id}
+        className={`pm-item ${altIdx != null && altIdx % 2 === 1 ? 'pm-item--alt' : ''} ${isPaid ? 'pm-item--paid' : ''} ${fullyReserved ? 'pm-item--reserved' : ''} ${clickable ? 'pm-item--selectable' : ''} ${selected ? 'pm-item--selected' : ''}`}
+        onClick={clickable ? () => toggleItemSel(item) : undefined}
+      >
+        <span className={`pm-item__check ${selected || isPaid || fullyReserved ? 'pm-item__check--on' : ''}`}>
+          {isPaid || selected || fullyReserved ? '✓' : ''}
+        </span>
+        <span className="pm-item__qty">{item.qty}</span>
+        <div className="pm-item__name-wrap">
+          <span className="pm-item__name">{item.name}{isPaid ? ' — Ödendi' : ''}</span>
+          {item.note && <span className="pm-item__note">{item.note}</span>}
+          {reserved > 0 && (
+            <span className="pm-item__reserved">
+              {fullyReserved ? 'Ödemeye eklendi' : `${reserved} adet ödemeye eklendi`}
+            </span>
+          )}
+          {selected && item.qty > 1 && (
+            <div className="pm-item__qtysel" onClick={e => e.stopPropagation()}>
+              <button onClick={() => stepItemQty(item, -1)}>−</button>
+              <span>{selQty} / {item.qty}</span>
+              <button onClick={() => stepItemQty(item, +1)}>+</button>
+            </div>
+          )}
+        </div>
+        <span className="pm-item__unit">₺{itemUnit(item).toFixed(2)}</span>
+        <span className="pm-item__total">₺{(item.qty * itemUnit(item)).toFixed(2)}</span>
+      </div>
+    )
+  }
+
+  // Group header — combined qty + name + modifier summary + combined total,
+  // with an expand/collapse chevron revealing the individual rows. Clicking
+  // the header (outside the chevron) toggles the whole group's selection;
+  // only used for unpaid groups with more than one underlying item.
+  const renderGroupRow = (group, altIdx) => {
+    const first = group.items[0]
+    const totalQty = group.items.reduce((s, i) => s + i.qty, 0)
+    const combinedTotal = group.items.reduce((s, i) => s + i.qty * itemUnit(i), 0)
+    const groupAvailable = group.items.reduce((s, i) => s + availableQty(i), 0)
+    const groupReserved = group.items.reduce((s, i) => s + reservedQty(i.id), 0)
+    const groupSelQty = group.items.reduce((s, i) => s + (itemSel.get(i.id) || 0), 0)
+    const fullyReserved = groupAvailable === 0
+    const clickable = groupAvailable > 0
+    const selected = groupSelQty > 0
+    const itemMods = first.modifiers || []
+    const hasMods = itemMods.length > 0
+    const hasNote = !!(first.note && first.note.trim())
+    const key = `grp-${group.sig}`
+    const expanded = expandedGroups.has(key)
+    return (
+      <div key={key} className="pm-item-group">
+        <div
+          className={`pm-item pm-item-group__header ${altIdx != null && altIdx % 2 === 1 ? 'pm-item--alt' : ''} ${fullyReserved ? 'pm-item--reserved' : ''} ${clickable ? 'pm-item--selectable' : ''} ${selected ? 'pm-item--selected' : ''}`}
+          onClick={clickable ? () => toggleGroupSel(group.items) : undefined}
+        >
+          <span className={`pm-item__check ${selected || fullyReserved ? 'pm-item__check--on' : ''}`}>
+            {selected || fullyReserved ? '✓' : ''}
+          </span>
+          <span className="pm-item__qty pm-item-group__qty">
+            <button
+              className={`pm-item-group__chevron ${expanded ? 'pm-item-group__chevron--open' : ''}`}
+              aria-label={expanded ? 'Daralt' : 'Genişlet'}
+              onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(key) }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 6 15 12 9 18"/>
+              </svg>
+            </button>
+            {totalQty}
+          </span>
+          <div className="pm-item__name-wrap">
+            <span className="pm-item__name">{first.name}</span>
+            {hasMods && (
+              <span className="pm-item__mods-summary">
+                {itemMods.map(m => `+ ${m.name}${(m.quantity || 1) > 1 ? ` ×${m.quantity}` : ''}`).join(', ')}
+              </span>
+            )}
+            {hasNote && <span className="pm-item__note">{first.note}</span>}
+            {groupReserved > 0 && (
+              <span className="pm-item__reserved">
+                {fullyReserved ? 'Ödemeye eklendi' : `${groupReserved} adet ödemeye eklendi`}
+              </span>
+            )}
+            {selected && (
+              <span className="pm-item__reserved">{groupSelQty} / {totalQty} seçili</span>
+            )}
+          </div>
+          <span className="pm-item__unit">₺{itemUnit(first).toFixed(2)}</span>
+          <span className="pm-item__total">₺{combinedTotal.toFixed(2)}</span>
+        </div>
+        {expanded && (
+          <div className="pm-item-group__children">
+            {group.items.map(item => renderItemRow(item, null))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="pm-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="pm-modal">
@@ -449,43 +591,10 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
                 <span>BİRİM</span>
                 <span>TOPLAM</span>
               </div>
-              {items.map((item, idx) => {
-                const isPaid = !!item.paid
-                const reserved = isPaid ? 0 : reservedQty(item.id)
-                const fullyReserved = !isPaid && reserved >= item.qty
-                const selQty = isPaid ? 0 : (itemSel.get(item.id) || 0)
-                const selected = selQty > 0
-                const clickable = !isPaid && !fullyReserved
-                return (
-                  <div
-                    key={item.id}
-                    className={`pm-item ${idx % 2 === 1 ? 'pm-item--alt' : ''} ${isPaid ? 'pm-item--paid' : ''} ${fullyReserved ? 'pm-item--reserved' : ''} ${clickable ? 'pm-item--selectable' : ''} ${selected ? 'pm-item--selected' : ''}`}
-                    onClick={clickable ? () => toggleItemSel(item) : undefined}
-                  >
-                    <span className={`pm-item__check ${selected || isPaid || fullyReserved ? 'pm-item__check--on' : ''}`}>
-                      {isPaid || selected || fullyReserved ? '✓' : ''}
-                    </span>
-                    <span className="pm-item__qty">{item.qty}</span>
-                    <div className="pm-item__name-wrap">
-                      <span className="pm-item__name">{item.name}{isPaid ? ' — Ödendi' : ''}</span>
-                      {item.note && <span className="pm-item__note">{item.note}</span>}
-                      {reserved > 0 && (
-                        <span className="pm-item__reserved">
-                          {fullyReserved ? 'Ödemeye eklendi' : `${reserved} adet ödemeye eklendi`}
-                        </span>
-                      )}
-                      {selected && item.qty > 1 && (
-                        <div className="pm-item__qtysel" onClick={e => e.stopPropagation()}>
-                          <button onClick={() => stepItemQty(item, -1)}>−</button>
-                          <span>{selQty} / {item.qty}</span>
-                          <button onClick={() => stepItemQty(item, +1)}>+</button>
-                        </div>
-                      )}
-                    </div>
-                    <span className="pm-item__unit">₺{itemUnit(item).toFixed(2)}</span>
-                    <span className="pm-item__total">₺{(item.qty * itemUnit(item)).toFixed(2)}</span>
-                  </div>
-                )
+              {buildDisplayRows(items).map((row, idx) => {
+                if (row.kind === 'single') return renderItemRow(row.item, idx)
+                if (row.items.length === 1) return renderItemRow(row.items[0], idx)
+                return renderGroupRow(row, idx)
               })}
             </div>
 

@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext.jsx'
 import ItemCustomizeModal from '../ItemCustomizeModal/ItemCustomizeModal.jsx'
 import TablePickerModal from '../TablePickerModal/TablePickerModal.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
+import { buildDisplayRows } from '../../lib/itemGrouping.js'
 import './OrderPanel.css'
 
 // Sum of modifier deltas for one line item, weighted by modifier quantity.
@@ -69,45 +70,6 @@ const CATEGORY_ICONS = {
   coffee: IconCoffee, cake: IconCake, cocktail: IconCocktail, food: IconFood,
   tea: IconTea, juice: IconJuice, sandwich: IconSandwich,
   dessert: IconDessert, breakfast: IconBreakfast, pizza: IconPizza,
-}
-
-// ── Grouping (display-only) ─────────────────────────────────────────
-// Unpaid items sharing productId + variantId + sorted modifiers + note are
-// visually combined into one row. Paid items are never regrouped — they
-// keep rendering individually, exactly as before.
-function modifierSigPart(modifiers) {
-  return (modifiers || [])
-    .map(m => `${m.modifierId ?? m.id}:${m.quantity || 1}`)
-    .sort()
-    .join(',')
-}
-
-function itemSignature(item) {
-  return [
-    item.productId,
-    item.variantId ?? '',
-    modifierSigPart(item.modifiers),
-    (item.note || '').trim(),
-  ].join('|')
-}
-
-function buildDisplayRows(items) {
-  const rows = []
-  const indexBySig = new Map()
-  for (const item of items) {
-    if (item.paid) {
-      rows.push({ kind: 'single', item })
-      continue
-    }
-    const sig = itemSignature(item)
-    if (indexBySig.has(sig)) {
-      rows[indexBySig.get(sig)].items.push(item)
-    } else {
-      indexBySig.set(sig, rows.length)
-      rows.push({ kind: 'group', sig, items: [item] })
-    }
-  }
-  return rows
 }
 
 // ── Main component ────────────────────────────────────────────────
