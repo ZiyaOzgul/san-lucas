@@ -377,6 +377,8 @@ Avoid using Fable 5 for:
 
 ### Routing rules
 
+**Scope: these routing rules apply ONLY to the top-level orchestrator (Fable 5 in the main session).** Subagents (deep-reasoner, fast-worker) and Codex must execute their assigned brief directly themselves — they must NEVER re-route, spawn other agents, or delegate to Codex. If a subagent believes its task is out of scope, it reports back instead of delegating.
+
 Before doing any task, first choose one of these routes:
 
 * Fable direct

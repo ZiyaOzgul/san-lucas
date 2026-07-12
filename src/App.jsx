@@ -11,6 +11,7 @@ import Products from './pages/Products/Products.jsx'
 import Ingredients from './pages/Ingredients/Ingredients.jsx'
 import Reports from './pages/Reports/Reports.jsx'
 import Staff from './pages/Staff/Staff.jsx'
+import Members from './pages/Members/Members.jsx'
 import Settings from './pages/Settings/Settings.jsx'
 import Login from './pages/Login/Login.jsx'
 import ClosedTables from './pages/ClosedTables/ClosedTables.jsx'
@@ -77,6 +78,7 @@ function AppShell() {
           <Route path="/ingredients" element={<RequireP permKey="ingredients"><Ingredients /></RequireP>} />
           <Route path="/reports"     element={<RequireP permKey="reports"><Reports /></RequireP>} />
           <Route path="/staff"       element={<RequireP permKey={null}><Staff /></RequireP>} />
+          <Route path="/members"     element={<RequireP permKey={null}><Members /></RequireP>} />
           <Route path="/settings" element={<RequireP permKey="settings"><Settings /></RequireP>} />
         </Routes>
       </div>

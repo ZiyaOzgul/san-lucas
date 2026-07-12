@@ -55,6 +55,20 @@ export async function deleteStaffUser(supabaseUid) {
   // profile auto-deletes via ON DELETE CASCADE
 }
 
+export async function listMembers() {
+  const data = await invokeStaffAdmin({ action: 'list-members' })
+  return data.members
+}
+
+export async function setMemberPoints(uid, points) {
+  const data = await invokeStaffAdmin({ action: 'set-points', uid, points })
+  return data.points
+}
+
+export async function deleteMember(uid) {
+  await invokeStaffAdmin({ action: 'delete', uid })
+}
+
 /**
  * Upload product image bytes to Supabase Storage bucket "products".
  * Returns the public URL of the uploaded file.
