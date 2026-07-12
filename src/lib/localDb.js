@@ -2431,6 +2431,110 @@ export async function mirrorRemoteOrderStatus(orderId, { status, paymentMethod =
   await persistDb()
 }
 
+function getLocalProductIdByRemote(remoteId) {
+  requireDb()
+  if (remoteId == null) return null
+  const res = db.exec('SELECT id FROM products WHERE remote_id = ?', [String(remoteId)])
+  return res.length && res[0].values.length ? res[0].values[0][0] : null
+}
+
+function getLocalVariantIdByRemote(remoteId) {
+  requireDb()
+  if (remoteId == null) return null
+  const res = db.exec('SELECT id FROM product_variants WHERE remote_id = ?', [String(remoteId)])
+  return res.length && res[0].values.length ? res[0].values[0][0] : null
+}
+
+// A whole active order (with items + modifiers) discovered on Supabase —
+// created or grown by another device (QR, mobile, another desktop) since our
+// last pull. Idempotent: matched by remote_id, then local_id. A local order
+// already closed/cancelled is never resurrected, and existing local items are
+// only ever updated (never deleted) — an unsynced local edit always wins.
+export async function upsertRemoteActiveOrder({ remoteId, localId, tableId, tableName, waiterName, total, createdAt, items }) {
+  requireDb()
+  let localOrderId = null
+  let inserted = false
+  const addedItemIds = []
+
+  let res = db.exec('SELECT id, status, is_synced FROM orders WHERE remote_id = ?', [String(remoteId)])
+  if (!(res.length && res[0].values.length) && localId != null) {
+    res = db.exec('SELECT id, status, is_synced FROM orders WHERE local_id = ?', [String(localId)])
+  }
+
+  if (res.length && res[0].values.length) {
+    const [id, status, isSynced] = res[0].values[0]
+    localOrderId = id
+    if (status !== 'active') {
+      // Locally closed/cancelled wins — never resurrect
+      return { localOrderId, inserted: false, addedItemIds: [] }
+    }
+    if (isSynced) {
+      db.run(
+        'UPDATE orders SET table_id = ?, table_name = ?, waiter_name = ?, total = ? WHERE id = ?',
+        [tableId, tableName ?? '', waiterName ?? null, Number(total) || 0, localOrderId]
+      )
+    }
+  } else {
+    localOrderId = newLocalId()
+    const newLocal = localId ?? crypto.randomUUID()
+    db.run(
+      `INSERT INTO orders
+         (id, local_id, table_id, table_name, status, payment_method,
+          subtotal, tax, discount, total, is_synced, remote_id, created_at, closed_at, waiter_name)
+       VALUES (?, ?, ?, ?, 'active', '', ?, 0, 0, ?, 1, ?, ?, '', ?)`,
+      [localOrderId, String(newLocal), tableId, tableName ?? '',
+       Number(total) || 0, Number(total) || 0, String(remoteId),
+       createdAt ?? new Date().toISOString(), waiterName ?? null]
+    )
+    inserted = true
+  }
+
+  for (const item of (items ?? [])) {
+    const localProductId = getLocalProductIdByRemote(item.productRemoteId)
+    const localVariantId = getLocalVariantIdByRemote(item.variantRemoteId)
+
+    let iRes = db.exec('SELECT id, quantity, note, is_synced FROM order_items WHERE remote_id = ?', [String(item.remoteId)])
+    if (!(iRes.length && iRes[0].values.length) && item.localId != null) {
+      iRes = db.exec('SELECT id, quantity, note, is_synced FROM order_items WHERE local_id = ?', [String(item.localId)])
+    }
+
+    if (iRes.length && iRes[0].values.length) {
+      const [id, quantity, note, isSynced] = iRes[0].values[0]
+      if (isSynced) {
+        if (quantity !== item.quantity || (note || null) !== (item.note || null)) {
+          db.run('UPDATE order_items SET quantity = ?, note = ? WHERE id = ?',
+            [item.quantity, item.note || null, id])
+        }
+      }
+      // is_synced = 0 → local edit pending push — local wins, skip
+      continue
+    }
+
+    const newItemId = newLocalId()
+    db.run(
+      `INSERT INTO order_items
+         (id, local_id, order_id, product_id, variant_id, name, quantity, unit_price, note, added_at, is_synced, remote_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [newItemId, item.localId ?? crypto.randomUUID(), localOrderId,
+       localProductId, localVariantId, item.name, item.quantity, item.unitPrice,
+       item.note || null, item.addedAt ?? new Date().toISOString(), String(item.remoteId)]
+    )
+    for (const m of (item.modifiers ?? [])) {
+      db.run(
+        `INSERT INTO order_item_modifiers
+           (local_id, order_item_id, modifier_id, name, price_delta, quantity, is_synced, remote_id)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+        [crypto.randomUUID(), newItemId, m.modifierRemoteId ?? null, m.name,
+         Number(m.priceDelta) || 0, Math.max(1, Number(m.quantity) || 1), String(m.remoteId)]
+      )
+    }
+    addedItemIds.push(newItemId)
+  }
+
+  await persistDb()
+  return { localOrderId, inserted, addedItemIds }
+}
+
 // Close a materialized order with full financials so the reports
 // (payment breakdown, KPIs) see the same columns saveCompletedOrder writes.
 export async function completeActiveOrder(orderId, { subtotal, tax, discount, closedAt = null }) {

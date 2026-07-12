@@ -17,7 +17,7 @@ import {
   upsertVariantFromRemote,
   reconcileRemoteDeletions,
   getActiveRemoteOrders, upsertPaymentFromRemote, upsertPaymentItemFromRemote,
-  mirrorRemoteOrderStatus,
+  mirrorRemoteOrderStatus, upsertRemoteActiveOrder,
   getAllIngredients, markIngredientSynced,
   getUnsyncedVariants, markVariantSynced,
   getUnsyncedModifiers, markModifierSynced,
@@ -409,6 +409,12 @@ export async function syncToSupabase(log = null) {
       await markOrderSynced(id, data.id)
       synced.orders++
       ok(`[Sync] ✓ Sipariş: ₺${total} | ${payment_method} | ${status} (remote:${data.id})`)
+      if (status === 'active' && table_id != null) {
+        // Fire-and-forget — a table just gained an active order, flip it to
+        // occupied on Supabase without blocking the rest of the push queue.
+        void supabase.from('tables').update({ status: 'occupied' }).eq('id', table_id)
+          .then(() => {}).catch(() => {})
+      }
     } else if (error) {
       err('[Sync] ✗ Sipariş yüklenemedi', error)
     }
@@ -559,7 +565,7 @@ export async function pullFromSupabase(log = null) {
 
   if (!isSupabaseReady) {
     log?.('info', '[Sync] Supabase yapılandırılmamış — çekme atlandı')
-    return
+    return { discoveredActiveOrderIds: [] }
   }
 
   const pendingDeletes = getPendingDeletes()
@@ -781,4 +787,63 @@ export async function pullFromSupabase(log = null) {
       if (added > 0) ok(`[Sync] ↓ ${added} ödeme çekildi (diğer cihazlardan)`)
     }
   }
+
+  // ── Pull ALL active orders (whole-order live sync) ─────────────
+  // Covers every active order sitting at a table on Supabase, not just the
+  // ones already known locally (getActiveRemoteOrders above) — this is how a
+  // table opened by another device (QR, mobile, another desktop) shows up
+  // here without a restart. upsertRemoteActiveOrder is idempotent and safe
+  // to call for orders already known too.
+  const discoveredActiveOrderIds = []
+  const { data: liveOrders, error: liveErr } = await supabase
+    .from('orders')
+    .select(`
+      id, local_id, table_id, table_name, total, waiter_name, created_at, status,
+      order_items (
+        id, local_id, product_id, variant_id, quantity, unit_price, note, added_at,
+        order_item_modifiers ( id, modifier_id, name, price_delta, quantity )
+      )
+    `)
+    .eq('status', 'active')
+    .not('table_id', 'is', null)
+
+  if (liveErr) {
+    err('[Sync] ✗ Aktif masalar çekilemedi', liveErr)
+  } else if (liveOrders) {
+    let touched = 0
+    for (const o of liveOrders) {
+      const { inserted, localOrderId, addedItemIds } = await upsertRemoteActiveOrder({
+        remoteId: o.id,
+        localId: o.local_id,
+        tableId: o.table_id,
+        tableName: o.table_name,
+        waiterName: o.waiter_name ?? null,
+        total: o.total,
+        createdAt: o.created_at,
+        items: (o.order_items ?? []).map(oi => ({
+          remoteId: oi.id,
+          localId: oi.local_id,
+          productRemoteId: oi.product_id,
+          variantRemoteId: oi.variant_id,
+          name: oi.name,
+          quantity: oi.quantity,
+          unitPrice: oi.unit_price,
+          note: oi.note,
+          addedAt: oi.added_at,
+          modifiers: (oi.order_item_modifiers ?? []).map(m => ({
+            remoteId: m.id,
+            modifierRemoteId: m.modifier_id,
+            name: m.name,
+            priceDelta: m.price_delta,
+            quantity: m.quantity,
+          })),
+        })),
+      })
+      discoveredActiveOrderIds.push(localOrderId)
+      if (inserted || addedItemIds.length > 0) touched++
+    }
+    if (touched > 0) ok(`[Sync] ↓ ${touched} aktif sipariş eklendi/güncellendi (canlı senkron)`)
+  }
+
+  return { discoveredActiveOrderIds }
 }

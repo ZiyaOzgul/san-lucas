@@ -52,22 +52,9 @@ function Tables() {
     return () => clearInterval(timer)
   }, [])
 
-  // ── Realtime: payments + payment_items → trigger sync ───────────
-  // When the mobile app records a split payment for a shared order, pull it
-  // down so the desktop UI reflects the new "paid" state quickly.
-  useEffect(() => {
-    if (!isSupabaseReady) return
-    const ch = supabase
-      .channel('payments-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
-        if (isOnline) triggerSync()
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_items' }, () => {
-        if (isOnline) triggerSync()
-      })
-      .subscribe()
-    return () => { supabase.removeChannel(ch) }
-  }, [isOnline, triggerSync])
+  // Payments/payment_items realtime moved to AppContext's always-on
+  // 'desktop-orders-realtime' channel so payment updates propagate app-wide,
+  // not just while this page is mounted.
 
   // ── Realtime QR order subscription ──────────────────────────────
   useEffect(() => {
@@ -497,6 +484,13 @@ function Tables() {
               .eq('id', rid)
           }
         }
+        // Table just closed — free it up remotely if nothing else is active there
+        if (isSupabaseReady) {
+          try {
+            const { data: rem } = await supabase.from('orders').select('id').eq('table_id', tableId).eq('status', 'active').limit(1)
+            if (!rem?.length) await supabase.from('tables').update({ status: 'empty' }).eq('id', tableId)
+          } catch (e) { console.warn('[Tables] masa durumu güncellenemedi', e) }
+        }
         if (isOnline) triggerSync()
       } catch (e) {
         console.error('[Tables] Failed to save order to DB', e)
@@ -702,6 +696,13 @@ function Tables() {
       if (anyClosed) refreshRevenue()
       if (lowStock.length) setLowStockAlerts(lowStock)
       console.log(`[Tables] ✓ ${transactionData.isFullPayment ? 'Order closed' : 'Partial payment'} — Masa ${tableId} | ₺${transactionData.paymentRows?.reduce((s, r) => s + Number(r.amount), 0).toFixed(2)}`)
+      // A group just closed — free the table remotely if nothing else is active there
+      if (anyClosed && isSupabaseReady) {
+        try {
+          const { data: rem } = await supabase.from('orders').select('id').eq('table_id', tableId).eq('status', 'active').limit(1)
+          if (!rem?.length) await supabase.from('tables').update({ status: 'empty' }).eq('id', tableId)
+        } catch (e) { console.warn('[Tables] masa durumu güncellenemedi', e) }
+      }
       if (isOnline) triggerSync()
     } catch (e) {
       console.error('[Tables] Failed to record payment', e)
@@ -775,6 +776,8 @@ function Tables() {
     if (current.orderId && isSupabaseReady) {
       try {
         await supabase.from('orders').update({ status: 'cancelled' }).eq('id', current.orderId)
+        const { data: rem } = await supabase.from('orders').select('id').eq('table_id', current.tableId).eq('status', 'active').limit(1)
+        if (!rem?.length) await supabase.from('tables').update({ status: 'empty' }).eq('id', current.tableId)
       } catch (e) {
         console.warn('[Tables] Could not update QR order status to cancelled', e)
       }

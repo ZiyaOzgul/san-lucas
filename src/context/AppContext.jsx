@@ -126,6 +126,50 @@ function groupSubtotal(items) {
   return (items ?? []).reduce((s, i) => s + i.qty * (i.unitPrice + modSum(i.modifiers)), 0)
 }
 
+// Maps a materialized active order (localDb.getAllActiveOrders row) onto a
+// runtime order group + the base table state it belongs to. Shared by the
+// init-hydration effect (full rebuild on app start) and
+// mergeActiveOrdersIntoRuntime (additive merge on every sync). Pure — the
+// caller is responsible for the sibling-dependent "Sipariş N" label and for
+// deciding whether an existing table state should be reused instead of the
+// freshly built one here.
+function hydrateGroupFromActiveOrder(o) {
+  const isRemote = o.remote_id != null
+  const items = o.items.map(r => ({
+    // QR items keep their Supabase integer id as the runtime id;
+    // manual items use their uuid local_id — matches how
+    // ensurePersistedActiveOrder keys the rows.
+    id: isRemote && r.remote_id != null ? Number(r.remote_id) : r.local_id,
+    productId: r.product_id ?? null,
+    variantId: r.variant_id ?? null,
+    name: r.name,
+    unitPrice: r.unit_price,
+    qty: r.quantity,
+    note: r.note || '',
+    addedAt: r.added_at || o.created_at,
+    modifiers: r.modifiers,
+    paid: r.paid,
+  }))
+  const group = {
+    localId: o.local_id,
+    supabaseOrderId: isRemote ? Number(o.remote_id) : null,
+    persistedOrderId: o.id,
+    paidAmount: o.totalPaid,
+    items,
+  }
+  const tableState = {
+    status: 'occupied',
+    type: 'normal',
+    openTime: o.created_at
+      ? new Date(o.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+      : undefined,
+    openedAt: o.created_at,
+    waiter: o.waiter_name || '—',
+    orders: [],
+  }
+  return { group, tableState }
+}
+
 // ── Provider ─────────────────────────────────────────────────────
 export function AppProvider({ children }) {
   const [dbReady,       setDbReady]       = useState(false)
@@ -289,6 +333,79 @@ export function AppProvider({ children }) {
     })
   }, [])
 
+  // After a pull, additively merge every active order sitting on Supabase
+  // into the runtime table state — this is how a table opened by another
+  // device (QR, mobile, another desktop) appears here live, without waiting
+  // for an app restart. Never removes anything (refreshRuntimePaidState
+  // already handles orders closed elsewhere); only appends new groups/items
+  // and backfills ids on ones we already know about.
+  const mergeActiveOrdersIntoRuntime = useCallback(() => {
+    if (!isDbInitialized()) return
+    let actives
+    try { actives = getAllActiveOrders() } catch { return }
+    setRuntimeStates(prev => {
+      let changed = false
+      const next = { ...prev }
+      for (const o of actives) {
+        const tid = String(o.table_id)
+        const state = next[tid]
+        const orders = state?.orders ?? []
+        const idx = orders.findIndex(g =>
+          g.persistedOrderId === o.id ||
+          g.localId === o.local_id ||
+          (o.remote_id != null && g.supabaseOrderId === Number(o.remote_id))
+        )
+
+        if (idx === -1) {
+          // Unknown order — append a freshly hydrated group (creating the
+          // table's base state only if it doesn't exist yet)
+          const { group, tableState } = hydrateGroupFromActiveOrder(o)
+          const base = state ?? tableState
+          group.label = `Sipariş ${(base.orders?.length ?? 0) + 1}`
+          next[tid] = { ...base, orders: [...(base.orders ?? []), group] }
+          changed = true
+          continue
+        }
+
+        // Known order — backfill ids and append any DB items missing locally
+        const g = orders[idx]
+        const knownIds = new Set(g.items.map(i => String(i.id)))
+        const newItems = []
+        for (const r of o.items) {
+          if (knownIds.has(String(r.local_id))) continue
+          if (r.remote_id != null && knownIds.has(String(r.remote_id))) continue
+          newItems.push({
+            id: r.remote_id != null ? Number(r.remote_id) : r.local_id,
+            productId: r.product_id ?? null,
+            variantId: r.variant_id ?? null,
+            name: r.name,
+            unitPrice: r.unit_price,
+            qty: r.quantity,
+            note: r.note || '',
+            addedAt: r.added_at || o.created_at,
+            modifiers: r.modifiers,
+            paid: r.paid,
+          })
+        }
+        const supabaseOrderId = o.remote_id != null ? Number(o.remote_id) : g.supabaseOrderId
+        const persistedOrderId = o.id
+        const idsChanged = g.supabaseOrderId !== supabaseOrderId || g.persistedOrderId !== persistedOrderId
+        if (!newItems.length && !idsChanged) continue
+
+        const newOrders = [...orders]
+        newOrders[idx] = {
+          ...g,
+          supabaseOrderId,
+          persistedOrderId,
+          items: newItems.length ? [...g.items, ...newItems] : g.items,
+        }
+        next[tid] = { ...state, orders: newOrders }
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
   const triggerSync = useCallback(async () => {
     if (isSyncingRef.current) {
       pendingResyncRef.current = true
@@ -333,6 +450,7 @@ export function AppProvider({ children }) {
       await pullFromSupabase(addLog)
       refreshLocalData()
       refreshRuntimePaidState()
+      mergeActiveOrdersIntoRuntime()
       const post = isDbInitialized() ? getUnsyncedCount() : 0
       setLastSyncAt(new Date())
       addLog('info', `Senkronizasyon tamamlandı. Kalan bekleyen=${post}`)
@@ -349,7 +467,7 @@ export function AppProvider({ children }) {
         setTimeout(() => triggerSync(), 0)
       }
     }
-  }, [refreshLocalData, refreshRuntimePaidState])
+  }, [refreshLocalData, refreshRuntimePaidState, mergeActiveOrdersIntoRuntime])
 
   const syncIfOnline = useCallback((reason = '?') => {
     console.log(`[Sync] syncIfOnline çağrıldı (sebep=${reason}) — isOnline=${navigator.onLine}, supabaseReady=${isSupabaseReady}`)
@@ -378,6 +496,37 @@ export function AppProvider({ children }) {
     return () => clearInterval(t)
   }, [dbReady, dbError, syncIfOnline])
 
+  // Always-on realtime: orders/order_items/payments/payment_items changing on
+  // Supabase (QR, mobile, another desktop) debounce into a single
+  // triggerSync so the pull-driven merge above picks them up quickly without
+  // polling. Payments/payment_items used to be subscribed per-page in
+  // Tables.jsx — moved here so payment updates propagate app-wide, even when
+  // the Tables page isn't mounted.
+  useEffect(() => {
+    if (!isSupabaseReady) return
+    let t = null
+    const debounced = () => {
+      if (t) clearTimeout(t)
+      t = setTimeout(() => {
+        t = null
+        if (navigator.onLine) triggerSync()
+      }, 1000)
+    }
+    debounced.cancel = () => { if (t) { clearTimeout(t); t = null } }
+
+    const ch = supabase
+      .channel('desktop-orders-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, debounced)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, debounced)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_items' }, debounced)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_items' }, debounced)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, debounced)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_items' }, debounced)
+      .subscribe()
+
+    return () => { debounced.cancel(); supabase.removeChannel(ch) }
+  }, [triggerSync])
+
   // ── Init DB on mount ───────────────────────────────────────────
   useEffect(() => {
     initDb().then(() => {
@@ -397,40 +546,10 @@ export function AppProvider({ children }) {
         if (actives.length) {
           const hydrated = {}
           for (const o of actives) {
-            const isRemote = o.remote_id != null
-            const items = o.items.map(r => ({
-              // QR items keep their Supabase integer id as the runtime id;
-              // manual items use their uuid local_id — matches how
-              // ensurePersistedActiveOrder keys the rows.
-              id: isRemote && r.remote_id != null ? Number(r.remote_id) : r.local_id,
-              productId: r.product_id ?? null,
-              variantId: r.variant_id ?? null,
-              name: r.name,
-              unitPrice: r.unit_price,
-              qty: r.quantity,
-              note: r.note || '',
-              addedAt: r.added_at || o.created_at,
-              modifiers: r.modifiers,
-              paid: r.paid,
-            }))
-            const t = hydrated[o.table_id] ?? {
-              status: 'occupied',
-              type: 'normal',
-              openTime: o.created_at
-                ? new Date(o.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                : undefined,
-              openedAt: o.created_at,
-              waiter: o.waiter_name || '—',
-              orders: [],
-            }
-            t.orders.push({
-              localId: o.local_id,
-              label: `Sipariş ${t.orders.length + 1}`,
-              supabaseOrderId: isRemote ? Number(o.remote_id) : null,
-              persistedOrderId: o.id,
-              paidAmount: o.totalPaid,
-              items,
-            })
+            const { group, tableState } = hydrateGroupFromActiveOrder(o)
+            const t = hydrated[o.table_id] ?? tableState
+            group.label = `Sipariş ${t.orders.length + 1}`
+            t.orders.push(group)
             hydrated[o.table_id] = t
           }
           setRuntimeStates(hydrated)
@@ -473,6 +592,7 @@ export function AppProvider({ children }) {
         }
         refreshLocalData()
         refreshRuntimePaidState()
+        mergeActiveOrdersIntoRuntime()
       } catch (e) {
         console.error('[AppContext] açılış senkronizasyonu hata verdi', e)
       } finally {
@@ -484,7 +604,7 @@ export function AppProvider({ children }) {
         }
       }
     })()
-  }, [dbReady, dbError, authReady, refreshLocalData, refreshRuntimePaidState, triggerSync])
+  }, [dbReady, dbError, authReady, refreshLocalData, refreshRuntimePaidState, mergeActiveOrdersIntoRuntime, triggerSync])
 
   // ── Persist every open table (debounced) ───────────────────────
   // Any change to the open tables is materialized into sql.js ~1s later so a
@@ -528,12 +648,17 @@ export function AppProvider({ children }) {
             await setOrderStatus(o.id, 'cancelled') // propagates to Supabase on next push
           }
         }
+        // A local change just got materialized — push it out promptly instead
+        // of waiting for the 60s periodic re-sync.
+        if (navigator.onLine && isSupabaseReady && isDbInitialized() && getUnsyncedCount() > 0) {
+          syncIfOnline('local-change')
+        }
       } catch (e) {
         console.warn('[AppContext] açık masalar kalıcılaştırılamadı', e)
       }
     }, 1000)
     return () => clearTimeout(t)
-  }, [runtimeStates, dbReady, dbError, tableDefs])
+  }, [runtimeStates, dbReady, dbError, tableDefs, syncIfOnline])
 
   // If the user signs in after the initial sync already ran (getSession
   // timeout path or manual login), re-sync so RLS-gated data arrives
