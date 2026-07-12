@@ -2,7 +2,6 @@ import { createClient } from '@supabase/supabase-js'
 
 const url        = import.meta.env.VITE_SUPABASE_URL
 const key        = import.meta.env.VITE_SUPABASE_ANON_KEY
-const serviceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
 
 // Single-window Electron desktop app — navigator.locks cross-tab coordination is unnecessary
 // and has been observed to deadlock (getSession hangs → all subsequent auth and PostgREST
@@ -19,58 +18,40 @@ if (import.meta.env.DEV) {
   console.log('[Supabase] config', {
     urlHost: url ? new URL(url).host : '(missing)',
     anonKeyPrefix: key ? key.slice(0, 12) + '…' : '(missing)',
-    serviceKeyPresent: !!serviceKey,
     isReady: !!(url && key),
   })
 }
 
-// Admin client — uses service role key, bypasses RLS, can create/delete auth users.
-// storageKey isolates this client's GoTrue instance from the user-facing `supabase` client
-// to prevent session corruption from concurrent access to the same storage slot.
-export const supabaseAdmin = url && serviceKey
-  ? createClient(url, serviceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-        storageKey: 'sb-admin-isolated',
-        lock: noLock,
-      },
-    })
-  : null
+// Ayrıcalıklı personel işlemleri "staff-admin" Edge Function'ında yaşar —
+// service role key artık uygulama paketine girmez. Fonksiyon, çağıranın
+// JWT'sinin admin olduğunu sunucuda doğrular.
+async function invokeStaffAdmin(payload) {
+  if (!supabase) throw new Error('Supabase yapılandırılmamış. .env dosyasını kontrol edin.')
+  const { data, error } = await supabase.functions.invoke('staff-admin', { body: payload })
+  if (error) {
+    // FunctionsHttpError: sunucunun döndürdüğü Türkçe mesajı yüzeye çıkar
+    let msg = error.message
+    try {
+      const body = await error.context?.json?.()
+      if (body?.error) msg = body.error
+    } catch { /* gövde okunamadı — genel mesajla devam */ }
+    throw new Error(msg)
+  }
+  if (data?.error) throw new Error(data.error)
+  return data
+}
 
 export async function createStaffUser(email, password, fullName, permissions) {
-  if (!supabaseAdmin) throw new Error('Supabase admin client yapılandırılmamış. .env dosyasını kontrol edin.')
-  const { data, error } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  })
-  if (error) throw error
-  const uid = data.user.id
-  const { error: profileError } = await supabaseAdmin.from('profiles').upsert({
-    id:                  uid,
-    full_name:           fullName,
-    role:                'waiter',
-    can_take_orders:     permissions.canTakeOrders     ?? true,
-    can_close_tables:    permissions.canCloseTables     ?? false,
-    can_manage_products: permissions.canManageProducts  ?? false,
-  })
-  if (profileError) throw profileError
-  return uid
+  const data = await invokeStaffAdmin({ action: 'create', email, password, fullName, permissions })
+  return data.uid
 }
 
 export async function updateStaffPermissions(supabaseUid, permissions) {
-  if (!supabaseAdmin) return
-  await supabaseAdmin.from('profiles').update({
-    can_take_orders:     permissions.canTakeOrders,
-    can_close_tables:    permissions.canCloseTables,
-    can_manage_products: permissions.canManageProducts,
-  }).eq('id', supabaseUid)
+  await invokeStaffAdmin({ action: 'update-permissions', uid: supabaseUid, permissions })
 }
 
 export async function deleteStaffUser(supabaseUid) {
-  if (!supabaseAdmin) return
-  await supabaseAdmin.auth.admin.deleteUser(supabaseUid)
+  await invokeStaffAdmin({ action: 'delete', uid: supabaseUid })
   // profile auto-deletes via ON DELETE CASCADE
 }
 
@@ -98,13 +79,13 @@ export async function uploadProductImage(bytes, filename) {
 }
 
 export async function uploadCategoryImage(bytes, filename) {
-  const client = supabaseAdmin || supabase
-  if (!client) throw new Error('Supabase not configured')
-  const { error } = await client.storage
+  // Storage RLS politikaları category-images'i de kapsıyor — anon+auth yeterli
+  if (!supabase) throw new Error('Supabase not configured')
+  const { error } = await supabase.storage
     .from('category-images')
     .upload(filename, new Blob([bytes]), { upsert: true })
   if (error) throw error
-  const { data } = client.storage.from('category-images').getPublicUrl(filename)
+  const { data } = supabase.storage.from('category-images').getPublicUrl(filename)
   return data.publicUrl
 }
 

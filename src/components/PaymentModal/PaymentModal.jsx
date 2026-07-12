@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { getAllStaff } from '../../lib/localDb.js'
-import { supabase, supabaseAdmin, isSupabaseReady } from '../../lib/supabase.js'
+import { supabase, isSupabaseReady } from '../../lib/supabase.js'
 import { useApp } from '../../context/AppContext.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
 import { hasPerm } from '../../lib/permissions.js'
@@ -82,7 +82,7 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
     let mounted = true
     ;(async () => {
       try {
-        const client = supabaseAdmin || supabase
+        const client = supabase // profiles_select RLS'i is_staff() ile okumaya izin verir
         const { data: rows } = await client
           .from('orders').select('user_id').in('id', remoteOrderIds)
         const uid = rows?.find(r => r.user_id)?.user_id
@@ -388,15 +388,15 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
     // another device makes the update match 0 rows instead of overdrafting.
     if (activePointsUsage && customer) {
       try {
-        const client = supabaseAdmin || supabase
-        if (!client) throw new Error('Supabase yapılandırılmamış')
-        const { data, error } = await client
-          .from('profiles')
-          .update({ loyalty_points: customer.points - activePointsUsage.points })
-          .eq('id', customer.id)
-          .eq('loyalty_points', customer.points)
-          .select('loyalty_points')
-        if (error || !data?.length) throw error ?? new Error('bakiye değişti')
+        if (!supabase) throw new Error('Supabase yapılandırılmamış')
+        // SECURITY DEFINER RPC — personel yetkisiyle, iyimser kilitle düşer
+        // (bakiye ekranda görünenden farklıysa 'bakiye değişti' fırlatır)
+        const { error } = await supabase.rpc('redeem_loyalty_points', {
+          p_user_id:          customer.id,
+          p_points:           activePointsUsage.points,
+          p_expected_balance: customer.points,
+        })
+        if (error) throw error
       } catch (e) {
         console.error('[PaymentModal] puan düşülemedi', e)
         completedRef.current = false
