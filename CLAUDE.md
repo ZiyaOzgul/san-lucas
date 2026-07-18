@@ -359,7 +359,7 @@ Fable 5 should:
 * create the plan
 * split work into clear tasks
 * choose the right route for each task
-* delegate work when another agent or Codex is a better fit
+* delegate work when another agent is a better fit
 * review outputs from delegated work
 * make the final quality decision
 
@@ -377,14 +377,22 @@ Avoid using Fable 5 for:
 
 ### Routing rules
 
-**Scope: these routing rules apply ONLY to the top-level orchestrator (Fable 5 in the main session).** Subagents (deep-reasoner, fast-worker) and Codex must execute their assigned brief directly themselves — they must NEVER re-route, spawn other agents, or delegate to Codex. If a subagent believes its task is out of scope, it reports back instead of delegating.
+**Scope: these routing rules apply ONLY to the top-level orchestrator (Fable 5 in the main session).** Subagents (deep-reasoner, fast-worker, implementer) must execute their assigned brief directly themselves — they must NEVER re-route, spawn other agents, or delegate further. If a subagent believes its task is out of scope, it reports back instead of delegating.
+
+Subagent definitions live in `.claude/agents/` and are invoked via the Agent tool with the matching `subagent_type`:
+
+| Route | Model | subagent_type |
+|---|---|---|
+| deep-reasoner | Opus 4.8 | `deep-reasoner` |
+| fast-worker | Haiku 4.5 | `fast-worker` |
+| implementer | Sonnet 5 | `implementer` |
 
 Before doing any task, first choose one of these routes:
 
 * Fable direct
 * deep-reasoner
 * fast-worker
-* Codex
+* implementer
 * no action
 
 Always explain the routing choice in one sentence.
@@ -398,7 +406,7 @@ Use Fable direct for:
 * product or architecture direction
 * deciding whether to accept, revise, or escalate
 
-Use deep-reasoner for:
+Use deep-reasoner (Opus 4.8) for:
 
 * architecture decisions
 * complex debugging
@@ -407,7 +415,7 @@ Use deep-reasoner for:
 * risky refactors
 * second-opinion analysis before important changes
 
-Use fast-worker for:
+Use fast-worker (Haiku 4.5) for:
 
 * boilerplate
 * tests
@@ -417,7 +425,7 @@ Use fast-worker for:
 * repetitive mechanical changes
 * small documentation updates
 
-Use Codex for:
+Use implementer (Sonnet 5) for:
 
 * well-specified implementation tasks
 * codebase investigation
@@ -426,35 +434,27 @@ Use Codex for:
 * test, lint, or build checks
 * independent engineering review
 
-If a task clearly matches a subagent or Codex role, prefer delegation instead of doing the work directly.
+If a task clearly matches a subagent role, prefer delegation instead of doing the work directly.
 
 If you do not delegate, briefly explain why.
 
 Return all important results to Fable 5 before final acceptance.
 
-### Codex execution rule
+### Implementer execution rule
 
-When the selected route is Codex, do not continue the implementation yourself as Fable 5.
+When the selected route is implementer, do not continue the implementation yourself as Fable 5.
 
 Instead:
 
-1. Create a self-contained Codex brief.
+1. Create a self-contained implementer brief.
 2. Include the task, files or area, constraints, acceptance criteria, and verification command.
-3. Use the available Codex command or Codex workflow to delegate the task.
-4. Wait for Codex to return the result.
-5. Review the Codex result as Fable 5 before accepting it.
+3. Delegate via the Agent tool with `subagent_type: "implementer"`, passing the complete brief as the prompt — the subagent has no conversation context.
+4. Wait for the implementer to return the result.
+5. Review the implementer result as Fable 5 before accepting it.
 
-How to invoke Codex (Codex CLI is installed globally, authenticated via ChatGPT):
+Long runs: launch the agent in the background and collect the output when it finishes.
 
-* Preferred: the `/codex` plugin command if available in the session.
-* Otherwise run non-interactively from the shell (Bash tool, stdin must be closed with `</dev/null` or the command hangs):
-  `codex exec --sandbox workspace-write "<full Codex brief>" </dev/null`
-* For read-only work (investigation, review, verification without edits) use:
-  `codex exec --sandbox read-only "<full Codex brief>" </dev/null`
-* Always pass the complete brief as the prompt — Codex has no conversation context.
-* Long runs: use a background shell and collect the output when it finishes.
-
-Codex brief format:
+Implementer brief format:
 
 ```
 Task:
@@ -468,6 +468,7 @@ Constraints:
 * Do not add new dependencies unless explicitly approved.
 * Preserve existing behavior outside the requested scope.
 * Keep the change as small as safely possible.
+* Do not spawn other agents or delegate further.
 
 Acceptance criteria:
 * The requested change is implemented.
@@ -478,26 +479,26 @@ Acceptance criteria:
 Verification command:
 [Insert the relevant command, for example npm test, npm run lint, npm run build.]
 
-Expected Codex output:
+Expected implementer output:
 * Summary of changes
 * Files changed
 * Verification result
 * Risks or follow-up notes
 ```
 
-After Codex returns:
+After the implementer returns:
 
 * Review the result.
 * Decide: accept, revise, or escalate.
-* Do not accept Codex output without review.
+* Do not accept implementer output without review.
 
-If Codex is unavailable, say that Codex is unavailable and ask whether to continue directly or use another route.
+If the implementer agent is unavailable, say so and ask whether to continue directly or use another route.
 
 ### Before execution
 
 * produce a short plan
 * state the selected route
-* state which agent, model, or Codex workflow should handle each part
+* state which agent or model should handle each part
 * ask for confirmation when the task is broad, risky, destructive, or ambiguous
 
 Do not execute broad or risky changes before the user confirms the plan.
