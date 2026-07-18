@@ -470,6 +470,18 @@
   flex-shrink: 0;
 }
 
+/* ── Close row: "Masayı Kapat" sharing space with the print button ── */
+.om-close-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.om-close-row .btn--full {
+  flex: 1;
+}
+
 /* ── New group button ── */
 .om-new-group-btn {
   width: 100%;

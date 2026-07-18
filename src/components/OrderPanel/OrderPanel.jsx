@@ -3,8 +3,10 @@ import { useApp } from '../../context/AppContext.jsx'
 import ItemCustomizeModal from '../ItemCustomizeModal/ItemCustomizeModal.jsx'
 import TablePickerModal from '../TablePickerModal/TablePickerModal.jsx'
 import DiscountEditor from '../shared/DiscountEditor.jsx'
+import PrintButton from '../shared/PrintButton.jsx'
 import { buildDisplayRows } from '../../lib/itemGrouping.js'
 import { hasPerm } from '../../lib/permissions.js'
+import { buildReceiptHtml } from '../../lib/receipt.js'
 import './OrderPanel.css'
 
 // Sum of modifier deltas for one line item, weighted by modifier quantity.
@@ -106,6 +108,18 @@ function OrderPanel({
   const isOccupied = orderItems.length > 0
   // Primary manual order group (first one without supabaseOrderId, or first overall)
   const primaryGroup = orders.find(o => o.supabaseOrderId == null) ?? orders[0]
+
+  // ── Receipt printing (thermal printer, via the shared PrintButton) ──
+  // Sipariş No prefers the real persisted order id (Supabase or offline
+  // local_id) over a fallback, same preference order PaymentModal used.
+  const buildReceiptForPrint = () => buildReceiptHtml({
+    tableName: table.name,
+    orderNo: orders[0]?.persistedOrderId ?? orders[0]?.supabaseOrderId ?? `POS-${Date.now()}-TX`,
+    items: orderItems,
+    discount,
+    total,
+    staffName: currentUser?.full_name ?? currentUser?.email ?? '',
+  })
 
   const filteredProducts = products.filter(p => {
     const matchCat    = activeCatId === null || p.categoryId === activeCatId
@@ -536,14 +550,21 @@ function OrderPanel({
                 >
                   + Yeni Sipariş
                 </button>
-                {canClose && <button
-                  className="btn btn--primary btn--full"
-                  disabled={!isOccupied}
-                  onClick={onCloseTable}
-                  style={!isOccupied ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
-                >
-                  Masayı Kapat
-                </button>}
+                {(canClose || isOccupied) && (
+                  <div className="om-close-row">
+                    {canClose && <button
+                      className="btn btn--primary btn--full"
+                      disabled={!isOccupied}
+                      onClick={onCloseTable}
+                      style={!isOccupied ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
+                    >
+                      Masayı Kapat
+                    </button>}
+                    {isOccupied && (
+                      <PrintButton compact dropUp buildHtml={buildReceiptForPrint} />
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
