@@ -18,4 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cacheRemote:   (httpsUrl) => ipcRenderer.invoke('images:cacheRemote', httpsUrl),
     migrateLegacy: (filename) => ipcRenderer.invoke('images:migrateLegacy', filename),
   },
+  printers: {
+    list:         () => ipcRenderer.invoke('printers:list'),
+    printReceipt: (printerName, html) => ipcRenderer.invoke('printers:printReceipt', { printerName, html }),
+  },
 })

@@ -23,6 +23,39 @@ const NUMPAD_KEYS = ['1','2','3','4','5','6','7','8','9','C','0','⌫']
 
 function fmt(n) { return `₺${Number(n || 0).toFixed(2)}` }
 
+// ── Receipt printing helpers ───────────────────────────────────────
+const CAFE_INFO_KEY    = 'san-lucas-cafe-info'
+const LAST_PRINTER_KEY = 'san-lucas-last-printer'
+const DEFAULT_CAFE_NAME = 'San Lucas 1888 Cafe'
+
+function getCafeName() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CAFE_INFO_KEY) ?? '{}')
+    return (raw?.name && String(raw.name).trim()) || DEFAULT_CAFE_NAME
+  } catch {
+    return DEFAULT_CAFE_NAME
+  }
+}
+
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]))
+}
+
+const RECEIPT_WIDTH_CHARS = 32
+const receiptDivider = () => '-'.repeat(RECEIPT_WIDTH_CHARS)
+
+function PrinterIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 6 2 18 2 18 9" />
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <rect x="6" y="14" width="12" height="8" />
+    </svg>
+  )
+}
+
 function MethodIcon({ id }) {
   if (id === 'cash') return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -435,6 +468,122 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
   // Minted once per modal open — impure call in render would regenerate it
   const [transactionId] = useState(() => `POS-${Math.floor(10000 + Math.random() * 90000)}-TX`)
 
+  // ── Receipt printing (thermal printer via Electron) ─────────────
+  const hasPrinterBridge = typeof window !== 'undefined' && !!window.electronAPI?.printers
+  const [printPickerOpen, setPrintPickerOpen] = useState(false)
+  const [printerList,     setPrinterList]     = useState([])
+  const [printersLoading, setPrintersLoading] = useState(false)
+  const [printStatus,     setPrintStatus]     = useState(null) // { printerName, state: 'printing'|'error', message }
+  const [lastPrinter,     setLastPrinter]     = useState(() => {
+    try { return localStorage.getItem(LAST_PRINTER_KEY) } catch { return null }
+  })
+  const printAnchorRef = useRef(null)
+
+  // Prefer the real persisted order id (Supabase or offline local_id) over
+  // the modal's own transactionId, which is only a display fallback.
+  const orderNo = (partialOrder
+    ? (partialOrder.supabaseOrderId ?? partialOrder.localId)
+    : (table.orderId ?? table.localId)
+  ) ?? transactionId
+
+  // Close the picker when clicking outside its anchor
+  useEffect(() => {
+    if (!printPickerOpen) return
+    const onDocClick = (e) => {
+      if (printAnchorRef.current && !printAnchorRef.current.contains(e.target)) {
+        setPrintPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [printPickerOpen])
+
+  const togglePrintPicker = async () => {
+    if (printPickerOpen) { setPrintPickerOpen(false); return }
+    setPrintStatus(null)
+    setPrintPickerOpen(true)
+    if (!hasPrinterBridge) return
+    setPrintersLoading(true)
+    try {
+      const list = await window.electronAPI.printers.list()
+      setPrinterList(Array.isArray(list) ? list : [])
+    } catch (e) {
+      console.warn('[PaymentModal] yazıcı listesi alınamadı', e)
+      setPrinterList([])
+    } finally {
+      setPrintersLoading(false)
+    }
+  }
+
+  const buildReceiptHtml = () => {
+    const now      = new Date()
+    const dateStr  = now.toLocaleDateString('tr-TR')
+    const timeStr  = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+    const money    = (n) => `₺${Number(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const staffName = currentUser?.full_name || currentUser?.email || '—'
+
+    const itemLines = items.map((i) => {
+      const lineTotal = i.qty * itemUnit(i)
+      const modLines = (i.modifiers || []).map((m) =>
+        `<div class="r-mod">+ ${escapeHtml(m.name)}${(m.quantity || 1) > 1 ? ` ×${m.quantity}` : ''}</div>`
+      ).join('')
+      return `<div class="r-item"><span>${i.qty}× ${escapeHtml(i.name)}</span><span>${money(lineTotal)}</span></div>${modLines}`
+    }).join('')
+
+    return `<html><head><meta charset="utf-8"><style>
+      @page { margin: 0; }
+      * { box-sizing: border-box; }
+      body {
+        width: 72mm;
+        margin: 0 auto;
+        font-family: 'Courier New', monospace;
+        font-size: 12px;
+        text-align: center;
+        color: #000;
+        padding: 6px 4px;
+      }
+      .r-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+      .r-line { font-size: 11px; margin: 2px 0; }
+      .r-divider { font-size: 12px; margin: 6px 0; white-space: pre; }
+      .r-item { display: flex; justify-content: space-between; gap: 8px; text-align: left; padding: 2px 0; }
+      .r-mod { font-size: 10px; color: #333; text-align: left; padding-left: 10px; }
+      .r-discount { display: flex; justify-content: space-between; font-size: 11px; margin: 2px 0; }
+      .r-total { display: flex; justify-content: space-between; font-weight: 700; font-size: 15px; margin-top: 2px; }
+      .r-thanks { font-size: 11px; margin-top: 10px; line-height: 1.5; }
+    </style></head><body>
+      <div class="r-name">${escapeHtml(getCafeName())}</div>
+      <div class="r-line">Masa: ${escapeHtml(table.name)}</div>
+      <div class="r-line">${dateStr} ${timeStr}</div>
+      <div class="r-line">Sipariş No: ${escapeHtml(String(orderNo))}</div>
+      <div class="r-divider">${receiptDivider()}</div>
+      ${itemLines}
+      <div class="r-divider">${receiptDivider()}</div>
+      ${discount > 0 ? `<div class="r-discount"><span>İndirim</span><span>-${money(discount)}</span></div>` : ''}
+      <div class="r-total"><span>TOPLAM</span><span>${money(fullTotal)}</span></div>
+      <div class="r-line" style="margin-top:6px;">Çalışan: ${escapeHtml(staffName)}</div>
+      <div class="r-thanks">Bizi tercih ettiğiniz için<br/>teşekkür ederiz</div>
+      <div class="r-divider">------------ ✂ ------------</div>
+    </body></html>`
+  }
+
+  const handlePrint = async (printerName) => {
+    setPrintStatus({ printerName, state: 'printing' })
+    try {
+      const html = buildReceiptHtml()
+      const result = await window.electronAPI.printers.printReceipt(printerName, html)
+      if (result?.ok) {
+        try { localStorage.setItem(LAST_PRINTER_KEY, printerName) } catch {}
+        setLastPrinter(printerName)
+        setPrintStatus(null)
+        setPrintPickerOpen(false)
+      } else {
+        setPrintStatus({ printerName, state: 'error', message: `Yazdırılamadı: ${result?.error || 'bilinmeyen hata'}` })
+      }
+    } catch (e) {
+      setPrintStatus({ printerName, state: 'error', message: `Yazdırılamadı: ${e?.message || 'bilinmeyen hata'}` })
+    }
+  }
+
   // ── Item row rendering ───────────────────────────────────────────
   // Single line item — identical markup/behavior as before grouping was
   // introduced. Used both for standalone rows and for the expanded
@@ -569,7 +718,48 @@ function PaymentModal({ table, partialOrder, alreadyPaid = 0, onClose, onComplet
               </p>
             </div>
           </div>
-          <button className="pm-header__close" onClick={onClose}>✕</button>
+          <div className="pm-header__right">
+            <div className="pm-print" ref={printAnchorRef}>
+              <button className="pm-print__btn" onClick={togglePrintPicker} title="Fişi Yazdır">
+                <PrinterIcon />
+                <span>Yazdır</span>
+              </button>
+              {printPickerOpen && (
+                <div className="pm-print__picker">
+                  <div className="pm-print__picker-title">Yazıcı Seç</div>
+                  {!hasPrinterBridge && (
+                    <p className="pm-print__note">Yazdırma yalnızca masaüstü uygulamasında.</p>
+                  )}
+                  {hasPrinterBridge && printersLoading && (
+                    <p className="pm-print__note">Yazıcılar aranıyor…</p>
+                  )}
+                  {hasPrinterBridge && !printersLoading && printerList.length === 0 && (
+                    <p className="pm-print__note">Yazıcı bulunamadı.</p>
+                  )}
+                  {hasPrinterBridge && !printersLoading && printerList.map((p) => (
+                    <button
+                      key={p.name}
+                      className={`pm-print__row ${p.name === lastPrinter ? 'pm-print__row--last' : ''}`}
+                      onClick={() => handlePrint(p.name)}
+                      disabled={printStatus?.state === 'printing'}
+                    >
+                      <span className="pm-print__row-name">{p.displayName || p.name}</span>
+                      <span className="pm-print__row-tags">
+                        {p.isDefault && <span className="pm-print__chip">varsayılan</span>}
+                        {p.name === lastPrinter && <span className="pm-print__chip pm-print__chip--last">son kullanılan</span>}
+                      </span>
+                    </button>
+                  ))}
+                  {printStatus && (
+                    <p className={`pm-print__status ${printStatus.state === 'error' ? 'pm-print__status--error' : ''}`}>
+                      {printStatus.state === 'printing' ? 'Yazdırılıyor…' : printStatus.message}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            <button className="pm-header__close" onClick={onClose}>✕</button>
+          </div>
         </div>
 
         {/* ── Body ── */}

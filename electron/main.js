@@ -214,6 +214,75 @@ ipcMain.handle('images:migrateLegacy', async (_event, filename) => {
   }
 })
 
+// ── Thermal receipt printing ──────────────────────────────────────
+ipcMain.handle('printers:list', async () => {
+  try {
+    const wins = BrowserWindow.getAllWindows()
+    if (!wins.length) return []
+    const printers = await wins[0].webContents.getPrintersAsync()
+    return printers.map((p) => ({ name: p.name, displayName: p.displayName, isDefault: !!p.isDefault }))
+  } catch (err) {
+    console.error('[printers:list] failed:', err)
+    return []
+  }
+})
+
+ipcMain.handle('printers:printReceipt', (_event, { printerName, html } = {}) => {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+
+    let win
+    try {
+      win = new BrowserWindow({
+        show: false,
+        webPreferences: { sandbox: true },
+      })
+    } catch (err) {
+      finish({ ok: false, error: String(err?.message || err) })
+      return
+    }
+
+    timer = setTimeout(() => {
+      try { win.destroy() } catch {}
+      finish({ ok: false, error: 'timeout' })
+    }, 15000)
+
+    win.webContents.on('did-finish-load', () => {
+      try {
+        win.webContents.print(
+          { silent: true, deviceName: printerName, printBackground: true, margins: { marginType: 'none' } },
+          (success, reason) => {
+            try { win.destroy() } catch {}
+            finish(success ? { ok: true } : { ok: false, error: reason })
+          }
+        )
+      } catch (err) {
+        try { win.destroy() } catch {}
+        finish({ ok: false, error: String(err?.message || err) })
+      }
+    })
+
+    win.webContents.on('did-fail-load', (_e, code, desc) => {
+      try { win.destroy() } catch {}
+      finish({ ok: false, error: desc || `load-failed-${code}` })
+    })
+
+    try {
+      win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html || ''))
+    } catch (err) {
+      try { win.destroy() } catch {}
+      finish({ ok: false, error: String(err?.message || err) })
+    }
+  })
+})
+
 app.whenReady().then(() => {
   protocol.handle('app-image', async (request) => {
     try {
