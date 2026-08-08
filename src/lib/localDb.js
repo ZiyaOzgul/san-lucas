@@ -313,6 +313,17 @@ export async function initDb() {
     `CREATE INDEX IF NOT EXISTS idx_order_item_modifiers_item_id   ON order_item_modifiers(order_item_id)`,
     // Small key/value store for one-time maintenance flags (travels with the DB file)
     `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`,
+    // Offline login fallback: PBKDF2 salt+hash per email, saved on every
+    // successful online login so the same account can log in with no
+    // internet on this device. Never stores the plaintext password.
+    `CREATE TABLE IF NOT EXISTS offline_credentials (
+      email      TEXT PRIMARY KEY,
+      salt       TEXT NOT NULL,
+      hash       TEXT NOT NULL,
+      iterations INTEGER NOT NULL,
+      user_json  TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
   ]
   for (const sql of migrations) {
     try { db.run(sql) } catch { /* column already exists — ignore */ }
@@ -1548,6 +1559,40 @@ export async function markOrderItemModifierSynced(id, remoteId) {
 export async function clearPendingDelete(id) {
   db.run('DELETE FROM pending_deletes WHERE id = ?', [id])
   await persistDb()
+}
+
+// ── offline_credentials (LOCAL ONLY — offline login fallback) ─────
+// Upserted on every successful online login (see Login.jsx) so the same
+// account can authenticate on this device with no internet. Only a
+// PBKDF2 salt+hash is stored — never the plaintext password.
+export async function saveOfflineCredential({ email, salt, hash, iterations, user }) {
+  requireDb()
+  const cleanEmail = email.trim().toLowerCase()
+  const now = new Date().toISOString()
+  db.run(
+    `INSERT INTO offline_credentials (email, salt, hash, iterations, user_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(email) DO UPDATE SET
+       salt = excluded.salt, hash = excluded.hash, iterations = excluded.iterations,
+       user_json = excluded.user_json, updated_at = excluded.updated_at`,
+    [cleanEmail, salt, hash, iterations, JSON.stringify(user), now]
+  )
+  await persistDb()
+}
+
+export function getOfflineCredential(email) {
+  if (!db) return null
+  const cleanEmail = email.trim().toLowerCase()
+  const res = db.exec(
+    'SELECT salt, hash, iterations, user_json FROM offline_credentials WHERE email = ?',
+    [cleanEmail]
+  )
+  if (!res.length || !res[0].values.length) return null
+  const [salt, hash, iterations, userJson] = res[0].values[0]
+  let user = null
+  try { user = JSON.parse(userJson) } catch { user = null }
+  if (!user) return null
+  return { salt, hash, iterations, user }
 }
 
 export function checkLogin(email, password) {

@@ -18,6 +18,7 @@ import {
 import { reopenOrder } from '../lib/reopenOperations.js'
 import { syncToSupabase, pullFromSupabase } from '../lib/sync.js'
 import { deleteProductImage, resetSupabaseData, supabase, isSupabaseReady } from '../lib/supabase.js'
+import { getLastPassword, clearLastPassword } from '../lib/offlineAuth.js'
 
 const CACHED_USER_KEY = 'san-lucas-cached-user'
 
@@ -206,6 +207,7 @@ export function AppProvider({ children }) {
       try { await supabase.auth.signOut() } catch (e) { console.error('[Auth] signOut failed', e) }
     }
     localStorage.removeItem(CACHED_USER_KEY)
+    clearLastPassword()
     setCurrentUser(null)
   }, [])
 
@@ -485,6 +487,47 @@ export function AppProvider({ children }) {
     window.addEventListener('online', onReconnect)
     return () => window.removeEventListener('online', onReconnect)
   }, [syncIfOnline])
+
+  // An offline-authed session was only verified against a local PBKDF2 hash
+  // — it has no real Supabase JWT, so pushes would be rejected by RLS. As
+  // soon as the connection returns, try to establish a real session: first
+  // a plain refresh (covers "was already logged in, just went offline
+  // briefly"), then a real sign-in using the password kept in memory from
+  // the offline login form. Never logs the user out on failure — they keep
+  // working offline-style and the 60s periodic sync will retry.
+  useEffect(() => {
+    const onReconnect = async () => {
+      if (!currentUser?.offlineAuth || !isSupabaseReady) return
+      try {
+        const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+        if (refreshErr) console.warn('[Auth] offline→online refreshSession hata', refreshErr)
+        let session = refreshed?.session ?? null
+        if (!session) {
+          const pwd = getLastPassword()
+          if (pwd) {
+            const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+              email: currentUser.email,
+              password: pwd,
+            })
+            if (signInErr) console.warn('[Auth] offline→online signInWithPassword hata', signInErr)
+            else session = signInData?.session ?? null
+          }
+        }
+        if (session?.user) {
+          const u = await fetchProfileForUser(session.user) // no offlineAuth flag — real session recovered
+          setCurrentUser(u)
+          console.log('[Auth] offline oturum online kurtarıldı, senkronizasyon tetikleniyor')
+          syncIfOnline('offline-auth-recovered')
+        } else {
+          console.warn('[Auth] offline oturum online kurtarılamadı — çevrimdışı çalışmaya devam ediliyor')
+        }
+      } catch (e) {
+        console.warn('[Auth] offline→online re-auth hata', e)
+      }
+    }
+    window.addEventListener('online', onReconnect)
+    return () => window.removeEventListener('online', onReconnect)
+  }, [currentUser, syncIfOnline])
 
   // Periodic re-sync: retries failed pushes and picks up remote changes even
   // if no realtime event or local CRUD ever fires (e.g. RLS-empty first pull).

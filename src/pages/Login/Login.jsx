@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase, isSupabaseReady } from '../../lib/supabase.js'
-import { isDbInitialized, findStaffForAuth } from '../../lib/localDb.js'
+import { isDbInitialized, findStaffForAuth, getOfflineCredential, saveOfflineCredential } from '../../lib/localDb.js'
+import { hashPassword, verifyPassword, setLastPassword } from '../../lib/offlineAuth.js'
 import './Login.css'
 
 function withTimeout(promise, ms, label) {
@@ -18,6 +19,47 @@ function Login({ onLogin }) {
   const [error,      setError]      = useState('')
   const [loading,    setLoading]    = useState(false)
   const [rememberMe, setRememberMe] = useState(true)
+  const [isOffline,  setIsOffline]  = useState(!navigator.onLine)
+
+  useEffect(() => {
+    const up = () => setIsOffline(false)
+    const dn = () => setIsOffline(true)
+    window.addEventListener('online',  up)
+    window.addEventListener('offline', dn)
+    return () => {
+      window.removeEventListener('online',  up)
+      window.removeEventListener('offline', dn)
+    }
+  }, [])
+
+  // Offline fallback: look up a credential saved on this device during a
+  // previous online login, verify the password against its PBKDF2 hash,
+  // and log in locally — no Supabase call involved.
+  async function offlineLogin(cleanEmail, plainPassword) {
+    if (!isDbInitialized()) {
+      setError('Yerel veritabanı henüz hazır değil. Lütfen birkaç saniye sonra tekrar deneyin.')
+      return
+    }
+    const cred = getOfflineCredential(cleanEmail)
+    if (!cred) {
+      setError('Bu cihazda daha önce çevrimiçi giriş yapılmamış — ilk giriş için internet gerekli.')
+      return
+    }
+    let ok = false
+    try {
+      ok = await verifyPassword(plainPassword, cred)
+    } catch (e) {
+      console.error('[Login] offline verifyPassword hata', e)
+      setError(e?.message ?? 'Çevrimdışı giriş desteklenmiyor.')
+      return
+    }
+    if (!ok) {
+      setError('E-posta veya şifre hatalı.')
+      return
+    }
+    setLastPassword(plainPassword)
+    onLogin({ ...cred.user, offlineAuth: true })
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -25,9 +67,12 @@ function Login({ onLogin }) {
     setLoading(true)
     const cleanEmail = email.trim().toLowerCase()
     const t0 = performance.now()
-    console.log('[Login] submit →', { email: cleanEmail, isSupabaseReady })
+    console.log('[Login] submit →', { email: cleanEmail, isSupabaseReady, isOffline })
     try {
-      if (!isSupabaseReady) throw new Error('Supabase yapılandırılmamış. .env dosyasını kontrol edin.')
+      if (isOffline || !isSupabaseReady) {
+        await offlineLogin(cleanEmail, password)
+        return
+      }
 
       // Safety net: if signInWithPassword hangs but Supabase fires SIGNED_IN for this email
       // in the background (e.g. lock-contention edge case), we still treat it as success.
@@ -107,16 +152,28 @@ function Login({ onLogin }) {
       } catch (e) {
         console.warn('[Login] localStorage yazılamadı', e)
       }
+      // Save an offline-login credential for this device so the same account
+      // can sign in with no internet later. Must complete BEFORE onLogin —
+      // that call unmounts this screen, and a half-finished save would only
+      // surface later as "bu cihazda giriş yapılmamış" during an outage.
+      try {
+        if (isDbInitialized()) {
+          const cred = await hashPassword(password)
+          await saveOfflineCredential({ ...cred, email: cleanEmail, user: finalUser })
+        }
+      } catch (e) {
+        console.warn('[Login] çevrimdışı kimlik bilgisi kaydedilemedi', e)
+      }
+      setLastPassword(password)
       onLogin(finalUser)
     } catch (err) {
       console.error('[Login] hata', err)
       const msg = err?.message ?? String(err)
       if (/invalid login credentials/i.test(msg)) {
         setError('E-posta veya şifre hatalı.')
-      } else if (/yanıt vermedi/i.test(msg)) {
-        setError('Sunucu yanıt vermedi. İnternet ve Supabase URL\'ini kontrol edin.')
-      } else if (/fetch|network/i.test(msg)) {
-        setError('Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin.')
+      } else if (/fetch|network|yanıt vermedi|Failed to fetch|timeout/i.test(msg)) {
+        console.warn('[Login] online giriş ağ hatası — çevrimdışı girişe düşülüyor', msg)
+        await offlineLogin(cleanEmail, password)
       } else {
         setError(msg)
       }
@@ -170,6 +227,12 @@ function Login({ onLogin }) {
             />
             <span>Beni hatırla</span>
           </label>
+
+          {isOffline && (
+            <p className="login-offline-notice">
+              Çevrimdışı mod — bu cihazda kayıtlı hesapla giriş yapabilirsiniz.
+            </p>
+          )}
 
           {error && <p className="login-error">{error}</p>}
 
