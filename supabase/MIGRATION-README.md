@@ -98,3 +98,32 @@ bucket'larını **boş** olarak oluşturur — içindeki dosyalar taşınmaz. İ
   normal kayıt akışıyla oluşturulmalıdır.
 - Local sql.js (offline) veritabanı şeması bu dosyadan etkilenmez — o ayrı bir
   konudur (`src/lib/localDb.js`).
+
+---
+
+## Ortam dosyaları (çok işletmeli kurulum)
+
+İki işletme aynı kod tabanını, **ayrı Supabase projelerini** kullanır:
+
+| İşletme | Supabase projesi | Ortam dosyası |
+|---|---|---|
+| San Lucas | `qparpdpwplsfbktbgozm` | `sanlucas.env` |
+| Mars Lounge | `bhxqjrocctiqoaxvooho` | `mars.env` |
+
+Bu dosyalar `.gitignore`'dadır (depoya girmez); her makinede yerel olarak bulunur.
+
+**Kullanım — derlemeden önce hedefi seç:**
+
+```
+copy mars.env .env        :: Mars Lounge için
+copy sanlucas.env .env    :: San Lucas için
+```
+
+Aynı düzen mobil depoda da geçerlidir (`EXPO_PUBLIC_` önekli değişkenlerle).
+
+**Dikkat — CI ile üretilen Windows kurulumu bu dosyaları kullanmaz.** Anahtarlar
+derleme anında GitHub Actions secret'larından (`VITE_SUPABASE_URL`,
+`VITE_SUPABASE_ANON_KEY`) okunup paketin içine gömülür. Mars Lounge'ın kendi
+kurulum dosyası için ayrı bir depo (ya da ayrı secret setine sahip ayrı bir iş
+akışı) gerekir. Aynı şekilde Netlify'da ortam değişkenleri site ayarlarından,
+EAS'ta ise `eas.json` veya `eas secret` üzerinden verilir.
