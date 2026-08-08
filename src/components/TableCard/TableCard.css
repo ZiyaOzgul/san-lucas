@@ -50,6 +50,17 @@
   background-color: #f0fdf4;
 }
 
+/* ── Idle-time warning (additive — layers on top of --active/--qr/--alert) ── */
+.table-card--idle-warn {
+  background-color: var(--color-warning-light);
+  border-left: 4px solid var(--color-warning);
+}
+
+.table-card--idle-alert {
+  background-color: var(--color-danger-light);
+  border-left: 4px solid var(--color-danger);
+}
+
 /* ── Top badge row ── */
 .table-card__top-row {
   display: flex;
@@ -123,6 +134,12 @@
 .table-card__time {
   font-size: 13px;
   font-weight: 500;
+}
+
+.table-card__idle-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
 }
 
 /* ── QR body ── */

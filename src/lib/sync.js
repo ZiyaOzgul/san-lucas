@@ -18,6 +18,7 @@ import {
   reconcileRemoteDeletions,
   getActiveRemoteOrders, upsertPaymentFromRemote, upsertPaymentItemFromRemote,
   mirrorRemoteOrderStatus, upsertRemoteActiveOrder,
+  filterUnknownRemoteOrders, insertRemoteCompletedOrder,
   getAllIngredients, markIngredientSynced,
   getUnsyncedVariants, markVariantSynced,
   getUnsyncedModifiers, markModifierSynced,
@@ -41,6 +42,18 @@ function fmtErr(e) {
   if (e.hint) parts.push(`hint=${e.hint}`)
   if (e.status) parts.push(`status=${e.status}`)
   return parts.length ? parts.join(' | ') : String(e)
+}
+
+// Başka cihazlarda kapatılmış satışların geriye dönük çekileceği pencere.
+// Raporlar bu aralıktaki mobil satışları da görür; daha eskisi zaten yereldedir.
+const COMPLETED_PULL_WINDOW_DAYS = 30
+
+// Supabase'de order_items.name kolonu yok — görünen ad, gömülü ürün/varyant
+// ilişkisinden masaüstüyle aynı biçimde ("Ürün (Varyant)") kurulur.
+function remoteItemName(oi) {
+  const base = oi.products?.name ?? 'Ürün'
+  const variant = oi.product_variants?.name
+  return variant ? `${base} (${variant})` : base
 }
 
 export async function syncToSupabase(log = null) {
@@ -371,7 +384,7 @@ export async function syncToSupabase(log = null) {
 
   // ── Orders ─────────────────────────────────────────────────────
   const orders = getUnsyncedOrders()
-  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, remoteId] of orders) {
+  for (const [id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, discount, remoteId] of orders) {
     // Active (materialized) orders have closed_at = '' locally — send null
     const orderPayload = {
       table_id, status,
@@ -379,6 +392,7 @@ export async function syncToSupabase(log = null) {
       total, created_at,
       closed_at: closed_at || null,
       waiter_name: waiter_name ?? null,
+      discount: Number(discount) || 0,
     }
     let data, error
     if (remoteId) {
@@ -795,12 +809,20 @@ export async function pullFromSupabase(log = null) {
   // here without a restart. upsertRemoteActiveOrder is idempotent and safe
   // to call for orders already known too.
   const discoveredActiveOrderIds = []
+  // NOTE: Supabase'in orders tablosunda `table_name` YOKTUR (o kolon yalnızca
+  // bu cihazın lokal SQLite şemasında var). Onu select etmek PostgREST'te
+  // 400/42703 verip TÜM isteği reddediyordu — mobilde açılan hiçbir masa bu
+  // yüzden masaüstüne inmiyordu. Masa adı table_id'den yerelde çözülür.
+  // Ürün/varyant adları da Supabase'de order_items üzerinde tutulmadığı için
+  // gömülü ilişkiden (products/product_variants) okunur.
   const { data: liveOrders, error: liveErr } = await supabase
     .from('orders')
     .select(`
-      id, local_id, table_id, table_name, total, waiter_name, created_at, status,
+      id, local_id, table_id, total, discount, waiter_name, created_at, status,
       order_items (
         id, local_id, product_id, variant_id, quantity, unit_price, note, added_at,
+        products ( name ),
+        product_variants ( name ),
         order_item_modifiers ( id, modifier_id, name, price_delta, quantity )
       )
     `)
@@ -816,16 +838,17 @@ export async function pullFromSupabase(log = null) {
         remoteId: o.id,
         localId: o.local_id,
         tableId: o.table_id,
-        tableName: o.table_name,
+        tableName: null, // yerelde table_id'den çözülür
         waiterName: o.waiter_name ?? null,
         total: o.total,
+        discount: o.discount,
         createdAt: o.created_at,
         items: (o.order_items ?? []).map(oi => ({
           remoteId: oi.id,
           localId: oi.local_id,
           productRemoteId: oi.product_id,
           variantRemoteId: oi.variant_id,
-          name: oi.name,
+          name: remoteItemName(oi),
           quantity: oi.quantity,
           unitPrice: oi.unit_price,
           note: oi.note,
@@ -843,6 +866,90 @@ export async function pullFromSupabase(log = null) {
       if (inserted || addedItemIds.length > 0) touched++
     }
     if (touched > 0) ok(`[Sync] ↓ ${touched} aktif sipariş eklendi/güncellendi (canlı senkron)`)
+  }
+
+  // ── Pull completed orders this device never saw ────────────────
+  // Mobilde hem açılıp hem kapatılan satışlar (bu cihaz kapalıyken ya da iki
+  // tur arasında) yukarıdaki aktif-sipariş yoluna hiç düşmez ve raporlarda
+  // eksik kalırdı — ciro, ödeme dağılımı ve personel performansı yanlış olurdu.
+  // Önce hafif bir id listesi çekilir, yalnızca yerelde bilinmeyenler
+  // tam olarak indirilir; böylece her turda tüm geçmiş yeniden çekilmez.
+  const since = new Date(Date.now() - COMPLETED_PULL_WINDOW_DAYS * 86400_000).toISOString()
+  const { data: doneIdRows, error: doneIdErr } = await supabase
+    .from('orders')
+    .select('id, local_id')
+    .eq('status', 'completed')
+    .gte('closed_at', since)
+
+  if (doneIdErr) {
+    err('[Sync] ✗ Kapanan siparişler listelenemedi', doneIdErr)
+  } else {
+    const unknownIds = filterUnknownRemoteOrders(doneIdRows ?? [])
+    if (unknownIds.length > 0) {
+      const { data: doneOrders, error: doneErr } = await supabase
+        .from('orders')
+        .select(`
+          id, local_id, table_id, total, discount, payment_method, waiter_name,
+          created_at, closed_at,
+          order_items (
+            id, local_id, product_id, variant_id, quantity, unit_price, note, added_at,
+            products ( name ),
+            product_variants ( name ),
+            order_item_modifiers ( id, modifier_id, name, price_delta, quantity )
+          ),
+          payments ( id, local_id, amount, payment_method, payer_label, processed_by, device, created_at )
+        `)
+        .in('id', unknownIds)
+
+      if (doneErr) {
+        err('[Sync] ✗ Kapanan siparişler çekilemedi', doneErr)
+      } else {
+        let added = 0
+        for (const o of (doneOrders ?? [])) {
+          await insertRemoteCompletedOrder({
+            remoteId: o.id,
+            localId: o.local_id,
+            tableId: o.table_id,
+            waiterName: o.waiter_name ?? null,
+            total: o.total,
+            discount: o.discount,
+            paymentMethod: o.payment_method ?? null,
+            createdAt: o.created_at,
+            closedAt: o.closed_at,
+            items: (o.order_items ?? []).map(oi => ({
+              remoteId: oi.id,
+              localId: oi.local_id,
+              productRemoteId: oi.product_id,
+              variantRemoteId: oi.variant_id,
+              name: remoteItemName(oi),
+              quantity: oi.quantity,
+              unitPrice: oi.unit_price,
+              note: oi.note,
+              addedAt: oi.added_at,
+              modifiers: (oi.order_item_modifiers ?? []).map(m => ({
+                remoteId: m.id,
+                modifierRemoteId: m.modifier_id,
+                name: m.name,
+                priceDelta: m.price_delta,
+                quantity: m.quantity,
+              })),
+            })),
+            payments: (o.payments ?? []).map(p => ({
+              remoteId: p.id,
+              localId: p.local_id,
+              amount: p.amount,
+              paymentMethod: p.payment_method,
+              payerLabel: p.payer_label,
+              processedBy: p.processed_by,
+              device: p.device,
+              createdAt: p.created_at,
+            })),
+          })
+          added++
+        }
+        if (added > 0) ok(`[Sync] ↓ ${added} kapanan satış çekildi (diğer cihazlardan)`)
+      }
+    }
   }
 
   return { discoveredActiveOrderIds }

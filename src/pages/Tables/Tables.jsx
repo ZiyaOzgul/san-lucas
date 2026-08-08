@@ -9,6 +9,7 @@ import {
 import { addPayments } from '../../lib/orderOperations.js'
 import { supabase, isSupabaseReady } from '../../lib/supabase.js'
 import { playAlertSound } from '../../lib/alertSound.js'
+import { idleMinutes as computeIdleMinutes } from '../../lib/tableActivity.js'
 import TableCard from '../../components/TableCard/TableCard.jsx'
 import OrderPanel from '../../components/OrderPanel/OrderPanel.jsx'
 import PaymentModal from '../../components/PaymentModal/PaymentModal.jsx'
@@ -144,7 +145,11 @@ function Tables() {
     const openMinutes = state.openedAt
       ? Math.max(0, Math.floor((nowTs - new Date(state.openedAt).getTime()) / 60000))
       : 0
-    return { ...def, ...state, orderItems, openMinutes }
+    // Only meaningful for occupied tables — idle time since the last ordered item.
+    const idleMinutes = state.status === 'occupied'
+      ? computeIdleMinutes({ items: orderItems, openedAt: state.openedAt }, nowTs)
+      : 0
+    return { ...def, ...state, orderItems, openMinutes, idleMinutes }
   })
 
   const visibleTables = tableFilter === 'open'

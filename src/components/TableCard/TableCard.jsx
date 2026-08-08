@@ -1,4 +1,5 @@
 import './TableCard.css'
+import { idleLevel } from '../../lib/tableActivity.js'
 
 function formatTime(minutes) {
   if (minutes < 60) return `${minutes} dk`
@@ -17,7 +18,7 @@ function ClockIcon({ color }) {
 }
 
 function TableCard({ table, isSelected, onClick }) {
-  const { name, status, type, openMinutes, itemCount, total } = table
+  const { name, status, type, openMinutes, itemCount, total, idleMinutes } = table
 
   if (status === 'empty') {
     return (
@@ -36,6 +37,13 @@ function TableCard({ table, isSelected, onClick }) {
     : type === 'alert' ? 'table-card--alert'
     : 'table-card--active'
 
+  // Idle-time warning — additive to cardClass, does not replace QR/alert meaning.
+  const idleLvl = idleLevel(idleMinutes)
+  const idleClass =
+    idleLvl === 'alert' ? 'table-card--idle-alert'
+    : idleLvl === 'warn' ? 'table-card--idle-warn'
+    : ''
+
   const clockColor =
     type === 'qr' ? 'var(--color-qr)'
     : type === 'alert' ? 'var(--color-danger)'
@@ -48,7 +56,7 @@ function TableCard({ table, isSelected, onClick }) {
 
   return (
     <div
-      className={`table-card ${cardClass} ${isSelected ? 'table-card--selected' : ''}`}
+      className={`table-card ${cardClass} ${idleClass} ${isSelected ? 'table-card--selected' : ''}`}
       onClick={onClick}
     >
       {/* Top badge row */}
@@ -96,6 +104,13 @@ function TableCard({ table, isSelected, onClick }) {
           {formatTime(openMinutes)}
         </span>
       </div>
+      {/* Yalnızca eşik aşılınca göster — mobil masa kartıyla aynı davranış,
+          normal masalarda gereksiz gürültü yapmasın. */}
+      {idleLvl !== 'ok' && (
+        <div className="table-card__idle-label">
+          {formatTime(idleMinutes)} sipariş yok
+        </div>
+      )}
 
       {/* Body */}
       {type === 'qr' ? (

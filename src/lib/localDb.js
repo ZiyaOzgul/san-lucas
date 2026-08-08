@@ -1444,7 +1444,7 @@ export async function markVariantSynced(id, remoteId) {
 
 export function getUnsyncedOrders() {
   const res = db.exec(
-    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, remote_id
+    `SELECT id, local_id, table_id, status, payment_method, total, created_at, closed_at, waiter_name, discount, remote_id
      FROM orders WHERE is_synced = 0`
   )
   return res.length ? res[0].values : []
@@ -2431,6 +2431,15 @@ export async function mirrorRemoteOrderStatus(orderId, { status, paymentMethod =
   await persistDb()
 }
 
+// Supabase orders satırı masa adı taşımaz (yalnızca table_id) — yerel
+// table_defs'ten çöz. Bulunamazsa çağıran tarafta '' fallback'i kullanılır.
+function getTableNameById(tableId) {
+  requireDb()
+  if (tableId == null) return null
+  const res = db.exec('SELECT name FROM table_defs WHERE id = ?', [tableId])
+  return res.length && res[0].values.length ? res[0].values[0][0] : null
+}
+
 function getLocalProductIdByRemote(remoteId) {
   requireDb()
   if (remoteId == null) return null
@@ -2450,11 +2459,13 @@ function getLocalVariantIdByRemote(remoteId) {
 // last pull. Idempotent: matched by remote_id, then local_id. A local order
 // already closed/cancelled is never resurrected, and existing local items are
 // only ever updated (never deleted) — an unsynced local edit always wins.
-export async function upsertRemoteActiveOrder({ remoteId, localId, tableId, tableName, waiterName, total, createdAt, items }) {
+export async function upsertRemoteActiveOrder({ remoteId, localId, tableId, tableName, waiterName, total, discount = 0, createdAt, items }) {
   requireDb()
   let localOrderId = null
   let inserted = false
   const addedItemIds = []
+  // Supabase sipariş satırında masa adı taşınmaz — yerel masa tanımından çöz
+  const resolvedTableName = tableName ?? getTableNameById(tableId) ?? ''
 
   let res = db.exec('SELECT id, status, is_synced FROM orders WHERE remote_id = ?', [String(remoteId)])
   if (!(res.length && res[0].values.length) && localId != null) {
@@ -2470,25 +2481,38 @@ export async function upsertRemoteActiveOrder({ remoteId, localId, tableId, tabl
     }
     if (isSynced) {
       db.run(
-        'UPDATE orders SET table_id = ?, table_name = ?, waiter_name = ?, total = ? WHERE id = ?',
-        [tableId, tableName ?? '', waiterName ?? null, Number(total) || 0, localOrderId]
+        'UPDATE orders SET table_id = ?, table_name = ?, waiter_name = ?, total = ?, discount = ? WHERE id = ?',
+        [tableId, resolvedTableName, waiterName ?? null, Number(total) || 0, Number(discount) || 0, localOrderId]
       )
     }
   } else {
     localOrderId = newLocalId()
     const newLocal = localId ?? crypto.randomUUID()
+    const net = Number(total) || 0
+    const disc = Number(discount) || 0
     db.run(
       `INSERT INTO orders
          (id, local_id, table_id, table_name, status, payment_method,
           subtotal, tax, discount, total, is_synced, remote_id, created_at, closed_at, waiter_name)
-       VALUES (?, ?, ?, ?, 'active', '', ?, 0, 0, ?, 1, ?, ?, '', ?)`,
-      [localOrderId, String(newLocal), tableId, tableName ?? '',
-       Number(total) || 0, Number(total) || 0, String(remoteId),
+       VALUES (?, ?, ?, ?, 'active', '', ?, 0, ?, ?, 1, ?, ?, '', ?)`,
+      [localOrderId, String(newLocal), tableId, resolvedTableName,
+       net + disc, disc, net, String(remoteId),
        createdAt ?? new Date().toISOString(), waiterName ?? null]
     )
     inserted = true
   }
 
+  addedItemIds.push(..._mergeRemoteOrderItems(localOrderId, items))
+
+  await persistDb()
+  return { localOrderId, inserted, addedItemIds }
+}
+
+// Remote sipariş kalemlerini yerel siparişe işler. Eşleşme remote_id, sonra
+// local_id ile yapılır; is_synced = 0 olan yerel satır (bekleyen düzenleme)
+// her zaman kazanır. Yeni eklenen yerel kalem id'lerini döner.
+function _mergeRemoteOrderItems(localOrderId, items) {
+  const addedItemIds = []
   for (const item of (items ?? [])) {
     const localProductId = getLocalProductIdByRemote(item.productRemoteId)
     const localVariantId = getLocalVariantIdByRemote(item.variantRemoteId)
@@ -2530,9 +2554,82 @@ export async function upsertRemoteActiveOrder({ remoteId, localId, tableId, tabl
     }
     addedItemIds.push(newItemId)
   }
+  return addedItemIds
+}
+
+// Verilen remote sipariş id'lerinden yerelde HİÇ bilinmeyenleri döner.
+// rows: [{ id, local_id }] — Supabase satırları.
+export function filterUnknownRemoteOrders(rows) {
+  requireDb()
+  const unknown = []
+  for (const r of (rows ?? [])) {
+    let res = db.exec('SELECT id FROM orders WHERE remote_id = ?', [String(r.id)])
+    if (res.length && res[0].values.length) continue
+    if (r.local_id) {
+      res = db.exec('SELECT id FROM orders WHERE local_id = ?', [String(r.local_id)])
+      if (res.length && res[0].values.length) continue
+    }
+    unknown.push(r.id)
+  }
+  return unknown
+}
+
+// Başka bir cihazda (mobil) hem açılıp hem kapatılmış, bu cihazın hiç
+// görmediği bir satış. Raporların (ciro, ödeme dağılımı, personel
+// performansı) eksik kalmaması için tamamlanmış olarak, ödemeleriyle
+// birlikte ve pre-synced (is_synced = 1) yazılır.
+export async function insertRemoteCompletedOrder({
+  remoteId, localId, tableId, waiterName, total, discount = 0,
+  paymentMethod = null, createdAt, closedAt, items, payments,
+}) {
+  requireDb()
+  const localOrderId = newLocalId()
+  const net  = Number(total) || 0
+  const disc = Number(discount) || 0
+
+  db.run(
+    `INSERT INTO orders
+       (id, local_id, table_id, table_name, status, payment_method,
+        subtotal, tax, discount, total, is_synced, remote_id, created_at, closed_at, waiter_name)
+     VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, ?, ?, 1, ?, ?, ?, ?)`,
+    [localOrderId, String(localId ?? crypto.randomUUID()), tableId,
+     getTableNameById(tableId) ?? '', paymentMethod || '',
+     net + disc, disc, net, String(remoteId),
+     createdAt ?? new Date().toISOString(),
+     closedAt ?? new Date().toISOString(), waiterName ?? null]
+  )
+
+  _mergeRemoteOrderItems(localOrderId, items)
+
+  for (const p of (payments ?? [])) {
+    await upsertPaymentFromRemote({
+      remoteId: p.remoteId, localId: p.localId, localOrderId,
+      amount: p.amount, paymentMethod: p.paymentMethod,
+      payerLabel: p.payerLabel, processedBy: p.processedBy,
+      device: p.device, createdAt: p.createdAt,
+    })
+  }
+
+  // Ödeme dağılımı raporu order-level tutar kolonlarını okur — masaüstünde
+  // completeActiveOrder ne yapıyorsa aynısını uygula.
+  const localPayments = getOrderPayments(localOrderId)
+  if (localPayments.length > 0) {
+    const sumMethod = (pred) => localPayments.filter(pred).reduce((s, p) => s + Number(p.amount), 0)
+    const cash   = sumMethod(p => p.payment_method === 'cash')
+    const iban   = sumMethod(p => p.payment_method === 'iban')
+    const points = sumMethod(p => p.payment_method === 'points')
+    const card   = sumMethod(p => !['cash', 'iban', 'points'].includes(p.payment_method))
+    const used = [['cash', cash], ['card', card], ['iban', iban], ['points', points]].filter(([, v]) => v > 0)
+    const method = used.length > 1 ? 'split' : (used[0]?.[0] ?? paymentMethod ?? 'card')
+    db.run(
+      `UPDATE orders SET payment_method = ?, cash_amount = ?, card_amount = ?, iban_amount = ?
+       WHERE id = ?`,
+      [method, cash > 0 ? cash : null, card > 0 ? card : null, iban > 0 ? iban : null, localOrderId]
+    )
+  }
 
   await persistDb()
-  return { localOrderId, inserted, addedItemIds }
+  return localOrderId
 }
 
 // Close a materialized order with full financials so the reports
