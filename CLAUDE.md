@@ -1,11 +1,13 @@
 # San Lucas Cafe POS — CLAUDE.md
 
 ## Project Overview
+
 Windows desktop POS application for a cafe. Built with Electron + React + Vite. No CSS frameworks — all styles are custom CSS. Backend is Supabase (database + realtime). Supports full offline operation via sql.js with automatic sync on reconnect.
 
 ---
 
 ## Tech Stack
+
 - **Electron** — desktop wrapper
 - **React 19** — UI
 - **Vite** — bundler
@@ -17,6 +19,7 @@ Windows desktop POS application for a cafe. Built with Electron + React + Vite. 
 ---
 
 ## Folder Structure
+
 ```
 san-lucas/
 ├── electron/
@@ -152,14 +155,14 @@ Defined in `src/styles/global.css`. Use everywhere — zero hardcoded colors.
   --color-text-secondary: #6b7280;
   --color-text-muted: #9ca3af;
   --color-border: #e5e7eb;
-  --color-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  --color-shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --color-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --color-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
   --radius-card: 10px;
   --radius-input: 6px;
   --radius-pill: 20px;
   --navbar-width: 72px;
   --panel-width: 320px;
-  --font-main: 'Segoe UI', system-ui, sans-serif;
+  --font-main: "Segoe UI", system-ui, sans-serif;
 }
 ```
 
@@ -168,6 +171,7 @@ Defined in `src/styles/global.css`. Use everywhere — zero hardcoded colors.
 ## Layout
 
 `App.jsx` wraps everything in a two-column layout:
+
 - Left: `Navbar` (72px fixed width, full height)
 - Right: `<Outlet />` fills remaining space
 
@@ -192,6 +196,7 @@ Defined in `src/styles/global.css`. Use everywhere — zero hardcoded colors.
 Vertical left navbar, 72px wide, white background, subtle right border.
 
 Items (top to bottom):
+
 - San Lucas logo / coffee icon (branding only)
 - Tables (grid icon)
 - Orders (receipt icon)
@@ -209,6 +214,7 @@ Each item: icon centered + label text below (11px).
 ## Pages
 
 ### Tables Page (`/`)
+
 - Header: "Masalar" + "X aktif masa" + live clock (top right)
 - Summary chips: "Toplam Ciro: ₺X" | "Aktif Masa: X" | "Bekleyen Sipariş: X"
 - Grid: 4 cards per row, responsive
@@ -218,6 +224,7 @@ Each item: icon centered + label text below (11px).
 - Clicking occupied table → slides in `OrderPanel` from right
 
 **OrderPanel** (320px right panel):
+
 - Header: table name + green "Açık" badge + X close
 - Scrollable items: quantity chip | name | unit price | line total
 - Divider → "Toplam: ₺X" bold right-aligned
@@ -225,6 +232,7 @@ Each item: icon centered + label text below (11px).
 - "Masayı Kapat" full-width amber button → opens `CloseTableModal`
 
 **CloseTableModal**:
+
 - Centered overlay, white modal
 - Header: "Masa X — Hesap"
 - Items summary + total bold
@@ -233,6 +241,7 @@ Each item: icon centered + label text below (11px).
 - On confirm: order → completed, table → empty, save locally + sync if online
 
 ### Orders Page (`/orders`)
+
 - Header: "Siparişler"
 - Filter tabs: [Tümü] [Aktif] [Tamamlandı] [İptal Edildi]
 - Right: date picker + search input
@@ -242,6 +251,7 @@ Each item: icon centered + label text below (11px).
 - Eye icon → order detail modal (items + total + payment + status timeline)
 
 ### Products Page (`/products`)
+
 - Header: "Ürünler"
 - Category filter tabs: [Tümü] + dynamic categories
 - Right: search input + "+ Ürün Ekle" amber button
@@ -251,6 +261,7 @@ Each item: icon centered + label text below (11px).
 - [İptal] [Kaydet] buttons
 
 ### Reports Page (`/reports`)
+
 - Header: "Raporlar"
 - Date tabs: [Bugün] [Bu Hafta] [Bu Ay] [Özel Aralık]
 - Right: [PDF İndir] [Excel İndir]
@@ -260,6 +271,7 @@ Each item: icon centered + label text below (11px).
 - Bottom full-width table: Ürün | Kategori | Satış Adedi | Stok Tüketimi | Toplam Gelir | Günlük Ort.
 
 ### Settings Page (`/settings`)
+
 - Left section list, right content
 - **Cafe Bilgileri**: name, address, phone + save
 - **Masa Yönetimi**: list with edit/delete + add table
@@ -271,11 +283,13 @@ Each item: icon centered + label text below (11px).
 ## Online / Offline Logic
 
 ### `useOnlineStatus.js`
+
 - Listens to `window` online/offline events
 - Pings Supabase to confirm real connectivity
 - Returns `{ isOnline: boolean }`
 
 ### When ONLINE
+
 - All reads from Supabase directly
 - Supabase Realtime subscriptions active:
   - `orders` INSERT → refresh Tables page, show notification
@@ -284,6 +298,7 @@ Each item: icon centered + label text below (11px).
 - All writes go directly to Supabase
 
 ### When OFFLINE
+
 - QR menu completely inactive (no network = no QR orders)
 - Windows app continues working fully
 - All reads from local sql.js database
@@ -291,7 +306,9 @@ Each item: icon centered + label text below (11px).
 - Persistent "Çevrimdışı" warning banner shown on every page
 
 ### `sync.js` — Sync Logic
+
 When connection restores (online event fires):
+
 1. Query sql.js for all records where `is_synced = false`
 2. Upload orders first, then order_items
 3. Upsert by `local_id` (uuid) to avoid duplicates
@@ -301,6 +318,7 @@ When connection restores (online event fires):
 7. **Must be idempotent** — running twice must never create duplicates
 
 ### `localDb.js`
+
 - Initialize sql.js on app start
 - Persist to: `app.getPath('userData') + '/san-lucas.db'`
 - Mirrors Supabase schema
@@ -311,12 +329,14 @@ When connection restores (online event fires):
 ## Electron Setup
 
 ### `main.js`
+
 - BrowserWindow: 1280×800, minWidth 1024, minHeight 600
 - Dev: load `http://localhost:5173`
 - Prod: load `dist/index.html`
 - Default OS window chrome (no custom frame)
 
 ### `preload.js`
+
 - Expose via `contextBridge` only:
   - App version
   - `userData` path (for sql.js persistence)
@@ -325,6 +345,7 @@ When connection restores (online event fires):
 ---
 
 ## Environment Variables (`.env`)
+
 ```
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
@@ -351,165 +372,106 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 ## Orchestration Workflow
 
-Use Fable 5 as the lead engineer and orchestrator.
+**Opus 5 is the lead engineer and orchestrator.** It owns the plan, the routing decisions, and the
+final quality call. Subagents do scoped work; Opus 5 decides what "done" means.
 
-Fable 5 should:
+Opus 5 should:
 
-* understand the goal
-* create the plan
-* split work into clear tasks
-* choose the right route for each task
-* delegate work when another agent is a better fit
-* review outputs from delegated work
-* make the final quality decision
+- understand the goal and its product context
+- create the plan and split work into clear tasks
+- choose the right route for each task
+- delegate when a subagent is a better fit — especially to protect the lead's context
+- review every delegated output before accepting it
+- finish work a subagent left incomplete (this happens often — see "When a subagent dies")
 
-Fable 5 should not do mechanical work unless it is necessary.
+Opus 5 should not do mechanical work unless it is necessary or delegation would cost more than it saves.
 
-Avoid using Fable 5 for:
-
-* broad file scanning
-* repetitive file edits
-* boilerplate generation
-* routine test writing
-* formatting-only changes
-* running tests without interpretation
-* simple refactors with clear acceptance criteria
+Avoid using Opus 5 for: broad file scanning, repetitive edits, boilerplate, routine test writing,
+formatting-only changes, running tests without interpretation.
 
 ### Routing rules
 
-**Scope: these routing rules apply ONLY to the top-level orchestrator (Fable 5 in the main session).** Subagents (deep-reasoner, fast-worker, implementer) must execute their assigned brief directly themselves — they must NEVER re-route, spawn other agents, or delegate further. If a subagent believes its task is out of scope, it reports back instead of delegating.
+**Scope: these rules apply ONLY to the top-level orchestrator (Opus 5 in the main session).**
+Subagents execute their brief directly — they must NEVER re-route, spawn other agents, or delegate
+further. If a subagent believes its task is out of scope, it reports back instead of delegating.
 
-Subagent definitions live in `.claude/agents/` and are invoked via the Agent tool with the matching `subagent_type`:
+Subagent definitions live in `.claude/agents/`, invoked via the Agent tool with `subagent_type`:
 
-| Route | Model | subagent_type |
-|---|---|---|
-| deep-reasoner | Opus 4.8 | `deep-reasoner` |
-| fast-worker | Haiku 4.5 | `fast-worker` |
-| implementer | Sonnet 5 | `implementer` |
+| Route         | Model     | subagent_type   | Use for                                                                                                    |
+| ------------- | --------- | --------------- | ---------------------------------------------------------------------------------------------------------- |
+| Opus 5 direct | —         | —               | planning, routing, review, product/architecture decisions, live DB operations, finishing dead agents' work |
+| implementer   | Sonnet 5  | `implementer`   | well-specified implementation, codebase investigation, terminal/UI verification, independent review        |
+| deep-reasoner | Opus 4.8  | `deep-reasoner` | reasoning-heavy second opinions, complex debugging, risky refactor analysis — offload, not escalation      |
+| fast-worker   | Haiku 4.5 | `fast-worker`   | boilerplate, tests, formatting, small mechanical edits                                                     |
 
-Before doing any task, first choose one of these routes:
+Always state the selected route in one sentence. If you don't delegate, say why briefly.
 
-* Fable direct
-* deep-reasoner
-* fast-worker
-* implementer
-* no action
+**Context is a budget.** Subagents start with fresh context; the lead's does not reset. When the lead's
+context is getting full, prefer delegation even for work the lead could do itself — and keep briefs
+self-contained so the lead never has to re-read large files afterwards.
 
-Always explain the routing choice in one sentence.
+### Delegation rule
 
-Use Fable direct for:
+When the route is a subagent, do not continue the implementation yourself. Instead:
 
-* planning
-* task decomposition
-* final review
-* quality decisions
-* product or architecture direction
-* deciding whether to accept, revise, or escalate
+1. Write a self-contained brief (the subagent has NO conversation context).
+2. Include: task, files/area, constraints, acceptance criteria, verification commands.
+3. Delegate via the Agent tool with the matching `subagent_type`; run long work in the background.
+4. Review the result as Opus 5 before accepting: accept, revise, or escalate.
 
-Use deep-reasoner (Opus 4.8) for:
-
-* architecture decisions
-* complex debugging
-* algorithmic decisions
-* reasoning-heavy trade-offs
-* risky refactors
-* second-opinion analysis before important changes
-
-Use fast-worker (Haiku 4.5) for:
-
-* boilerplate
-* tests
-* formatting
-* simple edits
-* small refactors
-* repetitive mechanical changes
-* small documentation updates
-
-Use implementer (Sonnet 5) for:
-
-* well-specified implementation tasks
-* codebase investigation
-* terminal verification
-* UI verification
-* test, lint, or build checks
-* independent engineering review
-
-If a task clearly matches a subagent role, prefer delegation instead of doing the work directly.
-
-If you do not delegate, briefly explain why.
-
-Return all important results to Fable 5 before final acceptance.
-
-### Implementer execution rule
-
-When the selected route is implementer, do not continue the implementation yourself as Fable 5.
-
-Instead:
-
-1. Create a self-contained implementer brief.
-2. Include the task, files or area, constraints, acceptance criteria, and verification command.
-3. Delegate via the Agent tool with `subagent_type: "implementer"`, passing the complete brief as the prompt — the subagent has no conversation context.
-4. Wait for the implementer to return the result.
-5. Review the implementer result as Fable 5 before accepting it.
-
-Long runs: launch the agent in the background and collect the output when it finishes.
-
-Implementer brief format:
+Brief format:
 
 ```
-Task:
-[One clear task sentence.]
+Task: [one clear sentence]
 
-Files / area:
-[Relevant files, folders, components, or system area.]
+Files / area: [relevant files, folders, system area — and what to READ FIRST]
 
 Constraints:
 * Do not touch unrelated files.
-* Do not add new dependencies unless explicitly approved.
+* No new dependencies unless explicitly approved.
 * Preserve existing behavior outside the requested scope.
-* Keep the change as small as safely possible.
+* TypeScript strict, no `any`. Turkish user-facing errors, English logs.
 * Do not spawn other agents or delegate further.
+* LIVE-DB CAUTION: [what may/may not be written; how to clean up]
 
-Acceptance criteria:
-* The requested change is implemented.
-* The change is limited to the specified area.
-* Existing behavior is preserved.
-* No new lint, type, build, or test failures are introduced.
+Acceptance criteria: [what must be true]
 
-Verification command:
-[Insert the relevant command, for example npm test, npm run lint, npm run build.]
+Verification: `npm test && npm run build && npm run lint` + [live check to run and report]
 
-Expected implementer output:
-* Summary of changes
-* Files changed
-* Verification result
-* Risks or follow-up notes
+Expected output: summary, files changed, verification results, risks.
 ```
 
-After the implementer returns:
+### When a subagent dies mid-task
 
-* Review the result.
-* Decide: accept, revise, or escalate.
-* Do not accept implementer output without review.
+Subagents in this project frequently hit session/weekly limits or transient API errors. This is normal —
+do not restart from scratch. The lead:
 
-If the implementer agent is unavailable, say so and ask whether to continue directly or use another route.
+1. runs `git status` to see what the agent left behind,
+2. reads only what's needed to judge the state,
+3. finishes the remaining work (usually verification, cleanup, commit),
+4. reports honestly what the agent did vs. what the lead completed.
+
+### Verification is not optional
+
+Nothing is "done" on this project until it has been exercised against the real system:
+
+- `npm test && npm run build && npm run lint` must be clean.
+- Anything user-facing gets a live check in the browser (Preview tools) with real data.
+- Anything touching the corpus, RAG, or AI gets a real call and its output reported verbatim
+  (this is how every silent bug in this project was found — synthetic tests were not enough).
+- Test users/rows created during verification MUST be cleaned up; verify with counts.
+  (`auth.admin.deleteUser` fails silently here — delete via SQL. See memory: themis-gotchas.)
 
 ### Before execution
 
-* produce a short plan
-* state the selected route
-* state which agent or model should handle each part
-* ask for confirmation when the task is broad, risky, destructive, or ambiguous
-
-Do not execute broad or risky changes before the user confirms the plan.
+- produce a short plan, state the route, and say who handles each part
+- ask for confirmation when the task is broad, risky, destructive, or ambiguous
 
 ### After execution
 
-* summarize what changed
-* list files changed
-* include verification results
-* identify remaining risks
-* make a clear recommendation: accept, revise, or escalate
+- summarize what changed and list files changed
+- include real verification results (not claims)
+- identify remaining risks and make a clear recommendation: accept, revise, or escalate
 
 ### Response format for every task
 
@@ -520,7 +482,7 @@ Route:
 [Selected route]
 
 Reason:
-[One sentence explaining why this route is selected.]
+[One sentence explaining why.]
 ```
 
-Then continue with the plan, delegation, execution, or review depending on the task.
+Then continue with the plan, delegation, execution, or review.
